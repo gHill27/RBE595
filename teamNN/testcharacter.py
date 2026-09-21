@@ -5,7 +5,15 @@ sys.path.insert(0, '../bomberman')
 from entity import CharacterEntity
 from colorama import Fore, Back
 import heapq
+import random
 import time
+import typing
+
+class state:
+    def __init(self, monster_pos, bomberman_pos, wrld):
+        
+        
+
 
 class TestCharacter(CharacterEntity):
 
@@ -26,7 +34,7 @@ class TestCharacter(CharacterEntity):
         super().__init__(name, avatar, x, y)
         self.wrld = None  # Initialize world reference
         self.path = []  # Initialize path list
-        self.time = 0  # Initialize time variable
+        self.time = 0  # Initialize time variable  
 
     def get_move(self):
         if self.path:
@@ -105,3 +113,65 @@ class TestCharacter(CharacterEntity):
         total_path.reverse()
         return total_path
 
+
+# def Expectimax(state): -> Action
+#     return argmax(ExpVal(Result(state,action)))
+# end
+# # ------------------------------- 
+# function Exp-value(state) returns a utility value
+# if Terminal-Test(state) then return Utility(state)
+# v ← 0
+# for each a in Actions(state) do
+# p ← Probability(a)
+# v ← v + p · Max-value(Result(state, a))
+# end for
+# return v
+# end function
+# function Max-value(state) returns a utility value
+# if Terminal-Test(state) then return Utility(state)
+# v ← −∞
+# for each a in Actions(state) do
+# v ← Max(v, Exp-value(Result(state,a)))
+# end for
+# return v
+# end function
+
+
+    # def expectimax(state, depth, agent):
+    #        # agent: 0 = (MAX), 1 = opponent (CHANCE)
+    #         if depth == 0 or state.is_terminal():
+    #             return evaluate(state)
+            
+    #         actions = state.get_legal_actions(agent)
+    #         if not actions:
+    #             return evaluate(state)
+    
+    #         if agent == 0:  # MAX node 
+    #             best = float('-inf')
+    #             for a in actions:
+    #                 successor = state.generate_successor(agent, a)
+    #                 value = expectimax(successor, depth, next_agent(agent))
+    #                 best = max(best, value)
+    #             return best
+    
+    #         else:  # CHANCE node — opponent's turn
+    #             total = 0
+    #             prob = 1 / len(actions)   # uniform random opponent
+    #             for a in actions:
+    #                 successor = state.generate_successor(agent, a)
+    #                 value = expectimax(successor, depth - 1, next_agent(agent))
+    #                 total += prob * value
+    #             return total
+    
+    # def next_agent(agent):
+    #     return 1 - agent  # alternate between MAX and CHANCE
+
+    # def get_action(state, depth=3):
+    #     best_action, best_value = None, float('-inf')
+    #     for a in state.get_legal_actions(0):
+    #         successor = state.generate_successor(0, a)
+    #         value = expectimax(successor, depth, agent=1)
+    #         if value > best_value:
+    #             best_value = value
+    #             best_action = a
+    #     return best_action
