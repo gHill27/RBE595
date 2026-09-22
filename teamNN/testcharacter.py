@@ -1,177 +1,360 @@
-# This is necessary to find the main code
 import sys
 sys.path.insert(0, '../bomberman')
-# Import necessary stuff
-from entity import CharacterEntity
-from colorama import Fore, Back
-import heapq
-import random
-import time
-import typing
 
-class state:
-    def __init(self, monster_pos, bomberman_pos, wrld):
-        
-        
+import math
+import heapq
+from itertools import product
+from functools import lru_cache
+
+from entity import CharacterEntity
+from sensed_world import SensedWorld
+from events import Event
+from colorama import Fore, Back
 
 
 class TestCharacter(CharacterEntity):
+    SEARCH_DEPTH = 2
+    ENGAGE_RADIUS = 4
+
+    W_EXIT_DIST = -8.0
+    DEATH_PENALTY = -100000.0
+    EXIT_BONUS = 100000.0
 
     def do(self, wrld):
-        # Your code here
-        self.wrld = wrld  # Store the world reference for use in A* algorithm
-        pos = (self.x, self.y)
-        goal = wrld.exitcell
-        if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
-            Astar_path = self.Astar(pos, goal)
-            self.path = Astar_path[1:]  # Skip the first position since it's the current position
-        if self.path:
-            self.move(*self.get_move())  # Move according to the next step in the path
-            self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
-            print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
+        me = wrld.me(self)
+        if me is None:
+            return
 
-    def __init__(self, name, avatar, x, y):
-        super().__init__(name, avatar, x, y)
-        self.wrld = None  # Initialize world reference
-        self.path = []  # Initialize path list
-        self.time = 0  # Initialize time variable  
+        self._astar_dist.cache_clear()
+        exit_pos = self._find_exit(wrld)
 
-    def get_move(self):
-        if self.path:
-            next_step = self.path.pop(0)
-            dx = next_step[0] - self.x
-            dy = next_step[1] - self.y
-            return dx, dy
+        # 1. IMMEDIATE WIN: Step into the exit portal if right next to it
+        for move in self._legal_character_moves(wrld, me.x, me.y):
+            nx, ny = me.x + move[0], me.y + move[1]
+            if exit_pos and (nx, ny) == exit_pos:
+                self.move(*move)
+                return
+
+        # 2. STRATEGIC BOMBING: Place bomb when path is blocked or wall is in the way
+        if not self._is_bomb_active(wrld):
+            if self._should_place_bomb(wrld, me, exit_pos):
+                self.place_bomb()
+
+        # 3. EXPECTIMAX LOOKAHEAD
+        best_value = -math.inf
+        best_move = (0, 0)
+
+        legal_moves = self._legal_character_moves(wrld, me.x, me.y)
+        for move in legal_moves:
+            sim_branch = SensedWorld.from_world(wrld)
+            sim_me = sim_branch.me(self)
+            sim_me.move(*move)
+
+            value = self._chance(sim_branch, self.SEARCH_DEPTH, exit_pos)
+            if value > best_value:
+                best_value = value
+                best_move = move
+
+        self.move(*best_move)
+
+        nx = max(0, min(wrld.width() - 1, me.x + best_move[0]))
+        ny = max(0, min(wrld.height() - 1, me.y + best_move[1]))
+        self.set_cell_color(nx, ny, Fore.WHITE + Back.BLUE)
+
+    # ---------------------------------------------------------------
+    # Strategic Bombing Decisions
+    # ---------------------------------------------------------------
+    def _is_bomb_active(self, wrld):
+        """Scans grid for active ticking bombs using official wrld API."""
+        for x in range(wrld.width()):
+            for y in range(wrld.height()):
+                if wrld.bomb_at(x, y) is not None:
+                    return True
+        return False
+
+    def _get_adjacent_walls(self, wrld, x, y):
+        """Returns adjacent destructible walls (cardinal 4-neighborhood)."""
+        walls = []
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                if wrld.wall_at(nx, ny):
+                    walls.append((nx, ny))
+        return walls
+
+    def _should_place_bomb(self, wrld, me, exit_pos):
+        pos = (me.x, me.y)
+
+        # Do not drop bomb if a monster is dangerously close (dist <= 2)
+        all_monsters = [
+            (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
+        ]
+        if any(self._manhattan(pos, m) <= 2 for m in all_monsters):
+            return False
+
+        # Must be next to at least one wall
+        adj_walls = self._get_adjacent_walls(wrld, me.x, me.y)
+        if not adj_walls:
+            return False
+
+        # Must have at least one walkable adjacent tile to safely step away to
+        escape_moves = [
+            (dx, dy)
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            if (dx != 0 or dy != 0)
+            and 0 <= me.x + dx < wrld.width()
+            and 0 <= me.y + dy < wrld.height()
+            and not wrld.wall_at(me.x + dx, me.y + dy)
+            and not wrld.bomb_at(me.x + dx, me.y + dy)
+        ]
+        if not escape_moves:
+            return False
+
+        # Place bomb if path to exit is blocked (999) or adjacent wall cuts distance to exit
+        if exit_pos is not None:
+            current_dist = self._astar_dist(wrld, pos, exit_pos)
+            if current_dist >= 999:
+                return True
+
+            my_dist_to_exit = self._manhattan(pos, exit_pos)
+            for wx, wy in adj_walls:
+                if self._manhattan((wx, wy), exit_pos) < my_dist_to_exit:
+                    return True
         else:
-            return 0, 0  # No movement if path is empty
+            return True
 
-    def Astar(self, pos, goal):
-        start_time = time.perf_counter()
-        
-        # open_set stores tuples of (f_score, pos)
-        open_set = []
-        heapq.heappush(open_set, (self.heuristic(pos, goal), pos))
-        
-        came_from = {}
-        g_score = {pos: 0}
-        closed_set = set()
+        return False
 
-        while open_set:
-            current_f, current = heapq.heappop(open_set)
+    # ---------------------------------------------------------------
+    # Expectimax using SensedWorld.next() and Events
+    # ---------------------------------------------------------------
+    def _chance(self, sim_wrld, depth, exit_pos):
+        sim_me = sim_wrld.me(self)
+        if sim_me is None:
+            return self.DEATH_PENALTY
+
+        monsters = []
+        for mlist in sim_wrld.monsters.values():
+            for m in mlist:
+                if self._manhattan((sim_me.x, sim_me.y), (m.x, m.y)) <= self.ENGAGE_RADIUS:
+                    monsters.append(m)
+
+        move_options = [self._legal_monster_moves(sim_wrld, m.x, m.y) for m in monsters]
+        joint_moves = list(product(*move_options)) if move_options else [()]
+
+        total_val = 0.0
+        prob = 1.0 / len(joint_moves)
+
+        for joint in joint_moves:
+            step_world = SensedWorld.from_world(sim_wrld)
+
+            for m_orig, mv in zip(monsters, joint):
+                m_target = self._find_matching_monster(step_world, m_orig)
+                if m_target:
+                    m_target.move(*mv)
+
+            next_world, events = step_world.next()
+
+            # 1. Event checks
+            node_value = self._evaluate_events(next_world, events)
+            if node_value is not None:
+                total_val += prob * node_value
+                continue
+
+            # 2. Escape detection (character is safely removed upon exiting)
+            if next_world.me(self) is None:
+                total_val += prob * self.EXIT_BONUS
+                continue
+
+            # 3. Recurse or evaluate leaf
+            if depth <= 1:
+                total_val += prob * self._heuristic(next_world, exit_pos)
+            else:
+                total_val += prob * self._max(next_world, depth - 1, exit_pos)
+
+        return total_val
+
+    def _max(self, sim_wrld, depth, exit_pos):
+        sim_me = sim_wrld.me(self)
+        if sim_me is None:
+            return self.DEATH_PENALTY
+
+        moves = self._legal_character_moves(sim_wrld, sim_me.x, sim_me.y)
+        best = -math.inf
+
+        for move in moves:
+            branch = SensedWorld.from_world(sim_wrld)
+            me_branch = branch.me(self)
+            me_branch.move(*move)
+            best = max(best, self._chance(branch, depth, exit_pos))
+
+        return best
+
+    def _evaluate_events(self, next_world, events):
+        for e in events:
+            if e.tpe == Event.CHARACTER_FOUND_EXIT:
+                return self.EXIT_BONUS
+            if e.tpe in (Event.CHARACTER_KILLED_BY_MONSTER, Event.BOMB_HIT_CHARACTER):
+                return self.DEATH_PENALTY
+        return None
+
+    def _heuristic(self, wrld, exit_pos):
+        me = wrld.me(self)
+        if me is None:
+            return self.EXIT_BONUS
+
+        score = 0.0
+        pos = (me.x, me.y)
+
+        # 1. Distance to exit
+        if exit_pos is not None:
+            exit_dist = self._astar_dist(wrld, pos, exit_pos)
+            score += self.W_EXIT_DIST * exit_dist
+
+        # 2. Distance to nearest monster
+        all_monsters = [
+            (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
+        ]
+        nearest_monster_dist = 999
+        if all_monsters:
+            nearest_monster_dist = min(self._astar_dist(wrld, pos, m) for m in all_monsters)
+            if nearest_monster_dist <= 1:
+                score -= 2000.0
+            elif nearest_monster_dist <= 2:
+                score -= 300.0
+            elif nearest_monster_dist <= 3:
+                score -= 50.0
+
+        # 3. ANTI-CORNERING / MOBILITY PENALTY
+        # If a monster is within threat range (<= 5 steps), penalize low-degree / tight dead-ends
+        if nearest_monster_dist <= 5:
+            # Reward open tiles with multiple branch choices
+            open_exits = self._open_neighbor_count(wrld, pos[0], pos[1])
+            if open_exits <= 2:
+                score -= 150.0  # Tight hallway or dead-end mouth
+            elif open_exits <= 3:
+                score -= 40.0
+            else:
+                score += 10.0 * open_exits
+
+            # Check if this corridor leads to an actual cul-de-sac
+            local_volume = self._reachable_space(wrld, pos, limit=7)
+            if local_volume < 5:
+                # Severe penalty for stepping into a shallow dead-end pocket
+                score -= 300.0 / max(1, local_volume)
+
+        # 4. Flee active bombs and ticking blasts
+        for x in range(wrld.width()):
+            for y in range(wrld.height()):
+                bomb = wrld.bomb_at(x, y)
+                if bomb is not None:
+                    if (pos[0] == x or pos[1] == y) and self._manhattan(pos, (x, y)) <= 4:
+                        timer = getattr(bomb, 'timer', 2)
+                        score -= 3000.0 / max(1, timer)
+
+        return score
+    
+    def _open_neighbor_count(self, wrld, x, y):
+        """Returns the number of walkable adjacent tiles (cardinal + diagonal)."""
+        count = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                    if not wrld.wall_at(nx, ny) and not wrld.bomb_at(nx, ny):
+                        count += 1
+        return count
+
+    def _reachable_space(self, wrld, start, limit=8):
+        """Measures local escape volume: returns count of accessible tiles within limit steps."""
+        queue = [start]
+        visited = {start}
+        
+        while queue and len(visited) < limit:
+            curr = queue.pop(0)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    nx, ny = curr[0] + dx, curr[1] + dy
+                    nbr = (nx, ny)
+                    if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                        if not wrld.wall_at(nx, ny) and not wrld.bomb_at(nx, ny) and nbr not in visited:
+                            visited.add(nbr)
+                            queue.append(nbr)
+        return len(visited)
+    # ---------------------------------------------------------------
+    # Grid Utilities and Pathfinding
+    # ---------------------------------------------------------------
+    def _find_exit(self, wrld):
+        if hasattr(wrld, 'exitcell') and wrld.exitcell is not None:
+            return wrld.exitcell
+        for x in range(wrld.width()):
+            for y in range(wrld.height()):
+                if wrld.exit_at(x, y):
+                    return (x, y)
+        return None
+
+    @lru_cache(maxsize=1024)
+    def _astar_dist(self, wrld, start, goal):
+        if start == goal:
+            return 0
+
+        frontier = [(self._manhattan(start, goal), 0, start)]
+        cost_so_far = {start: 0}
+
+        while frontier:
+            f, g, current = heapq.heappop(frontier)
 
             if current == goal:
-                execution_time = time.perf_counter() - start_time
-                self.time = execution_time
-                return self.reconstruct_path(came_from, current)
-
-            # Skip if we have already expanded this node
-            if current in closed_set:
+                return g
+            if g > cost_so_far[current]:
                 continue
-            closed_set.add(current)
 
-            current_g = g_score[current]
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    nx, ny = current[0] + dx, current[1] + dy
+                    if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny):
+                        new_cost = g + 1
+                        nbr = (nx, ny)
+                        if nbr not in cost_so_far or new_cost < cost_so_far[nbr]:
+                            cost_so_far[nbr] = new_cost
+                            priority = new_cost + self._manhattan(nbr, goal)
+                            heapq.heappush(frontier, (priority, new_cost, nbr))
 
-            for neighbor in self.get_neighbors(current):
-                if neighbor in closed_set:
-                    continue
+        return 999
 
-                tentative_g = current_g + 1
+    def _legal_character_moves(self, wrld, x, y):
+        moves = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                    if not wrld.wall_at(nx, ny) and not wrld.bomb_at(nx, ny) and not wrld.explosion_at(nx, ny):
+                        moves.append((dx, dy))
+        return moves if moves else [(0, 0)]
 
-                # If this path to neighbor is strictly better than any previous one:
-                if tentative_g < g_score.get(neighbor, float('inf')):
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_val = tentative_g + self.heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f_val, neighbor))
+    def _legal_monster_moves(self, wrld, x, y):
+        moves = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                    if not wrld.wall_at(nx, ny):
+                        moves.append((dx, dy))
+        return moves if moves else [(0, 0)]
 
-        return []  # No path found
+    def _find_matching_monster(self, target_world, source_monster):
+        for mlist in target_world.monsters.values():
+            for m in mlist:
+                if m.x == source_monster.x and m.y == source_monster.y:
+                    return m
+        return None
 
-    def heuristic(self, a, b):
-        # Using Manhattan distance as heuristic
+    def _manhattan(self, a, b):
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
-    
-    def get_neighbors(self, pos):
-        x, y = pos
-        neighbors = []
-        # Inline checks to avoid extra function call overhead
-        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-            if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
-                neighbors.append((nx, ny))
-        return neighbors
-    
-    def is_valid_move(self, pos):
-        # Check if the position is within bounds and not a wall
-        x, y = pos
-        # Assuming wrld is accessible and has methods to check bounds and walls
-        return (0 <= x < self.wrld.width()) and (0 <= y < self.wrld.height()) and not self.wrld.wall_at(pos[0], pos[1])
-
-    def reconstruct_path(self, came_from, current):
-        total_path = [current]
-        while current in came_from:
-            current = came_from[current]
-            total_path.append(current)
-        total_path.reverse()
-        return total_path
-
-
-# def Expectimax(state): -> Action
-#     return argmax(ExpVal(Result(state,action)))
-# end
-# # ------------------------------- 
-# function Exp-value(state) returns a utility value
-# if Terminal-Test(state) then return Utility(state)
-# v ← 0
-# for each a in Actions(state) do
-# p ← Probability(a)
-# v ← v + p · Max-value(Result(state, a))
-# end for
-# return v
-# end function
-# function Max-value(state) returns a utility value
-# if Terminal-Test(state) then return Utility(state)
-# v ← −∞
-# for each a in Actions(state) do
-# v ← Max(v, Exp-value(Result(state,a)))
-# end for
-# return v
-# end function
-
-
-    # def expectimax(state, depth, agent):
-    #        # agent: 0 = (MAX), 1 = opponent (CHANCE)
-    #         if depth == 0 or state.is_terminal():
-    #             return evaluate(state)
-            
-    #         actions = state.get_legal_actions(agent)
-    #         if not actions:
-    #             return evaluate(state)
-    
-    #         if agent == 0:  # MAX node 
-    #             best = float('-inf')
-    #             for a in actions:
-    #                 successor = state.generate_successor(agent, a)
-    #                 value = expectimax(successor, depth, next_agent(agent))
-    #                 best = max(best, value)
-    #             return best
-    
-    #         else:  # CHANCE node — opponent's turn
-    #             total = 0
-    #             prob = 1 / len(actions)   # uniform random opponent
-    #             for a in actions:
-    #                 successor = state.generate_successor(agent, a)
-    #                 value = expectimax(successor, depth - 1, next_agent(agent))
-    #                 total += prob * value
-    #             return total
-    
-    # def next_agent(agent):
-    #     return 1 - agent  # alternate between MAX and CHANCE
-
-    # def get_action(state, depth=3):
-    #     best_action, best_value = None, float('-inf')
-    #     for a in state.get_legal_actions(0):
-    #         successor = state.generate_successor(0, a)
-    #         value = expectimax(successor, depth, agent=1)
-    #         if value > best_value:
-    #             best_value = value
-    #             best_action = a
-    #     return best_action
