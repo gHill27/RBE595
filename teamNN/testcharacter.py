@@ -28,19 +28,19 @@ class TestCharacter(CharacterEntity):
         self._astar_dist.cache_clear()
         exit_pos = self._find_exit(wrld)
 
-        # 1. IMMEDIATE WIN: Step into the exit portal if right next to it
+        # 1. IMMEDIATE WIN CHECK: If exit is 1 step away, take it immediately
         for move in self._legal_character_moves(wrld, me.x, me.y):
             nx, ny = me.x + move[0], me.y + move[1]
             if exit_pos and (nx, ny) == exit_pos:
                 self.move(*move)
                 return
 
-        # 2. STRATEGIC BOMBING: Place bomb when path is blocked or wall is in the way
+        # 2. AGGRESSIVE OPPORTUNISTIC BOMB PLACEMENT
         if not self._is_bomb_active(wrld):
-            if self._should_place_bomb(wrld, me, exit_pos):
+            if self._should_place_bomb_aggressive(wrld, me, exit_pos):
                 self.place_bomb()
 
-        # 3. EXPECTIMAX LOOKAHEAD
+        # 3. EXPECTIMAX
         best_value = -math.inf
         best_move = (0, 0)
 
@@ -62,10 +62,10 @@ class TestCharacter(CharacterEntity):
         self.set_cell_color(nx, ny, Fore.WHITE + Back.BLUE)
 
     # ---------------------------------------------------------------
-    # Strategic Bombing Decisions
+    # Aggressive Opportunistic Bombing Logic
     # ---------------------------------------------------------------
     def _is_bomb_active(self, wrld):
-        """Scans grid for active ticking bombs using official wrld API."""
+        """Scans grid for active ticking bombs."""
         for x in range(wrld.width()):
             for y in range(wrld.height()):
                 if wrld.bomb_at(x, y) is not None:
@@ -73,31 +73,22 @@ class TestCharacter(CharacterEntity):
         return False
 
     def _get_adjacent_walls(self, wrld, x, y):
-        """Returns adjacent destructible walls (cardinal 4-neighborhood)."""
+        """Returns adjacent walls in 8 directions."""
         walls = []
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
-                if wrld.wall_at(nx, ny):
-                    walls.append((nx, ny))
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                    if wrld.wall_at(nx, ny):
+                        walls.append((nx, ny))
         return walls
 
-    def _should_place_bomb(self, wrld, me, exit_pos):
+    def _should_place_bomb_aggressive(self, wrld, me, exit_pos):
         pos = (me.x, me.y)
 
-        # Do not drop bomb if a monster is dangerously close (dist <= 2)
-        all_monsters = [
-            (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
-        ]
-        if any(self._manhattan(pos, m) <= 2 for m in all_monsters):
-            return False
-
-        # Must be next to at least one wall
-        adj_walls = self._get_adjacent_walls(wrld, me.x, me.y)
-        if not adj_walls:
-            return False
-
-        # Must have at least one walkable adjacent tile to safely step away to
+        # Baseline survival requirement: at least one escape step must exist right now
         escape_moves = [
             (dx, dy)
             for dx in (-1, 0, 1)
@@ -107,22 +98,37 @@ class TestCharacter(CharacterEntity):
             and 0 <= me.y + dy < wrld.height()
             and not wrld.wall_at(me.x + dx, me.y + dy)
             and not wrld.bomb_at(me.x + dx, me.y + dy)
+            and not wrld.explosion_at(me.x + dx, me.y + dy)
         ]
         if not escape_moves:
             return False
 
-        # Place bomb if path to exit is blocked (999) or adjacent wall cuts distance to exit
+        all_monsters = [
+            (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
+        ]
+        min_monster_dist = min((self._manhattan(pos, m) for m in all_monsters), default=999)
+
+        # Suicide guard: do not drop a bomb if a monster is directly adjacent (dist == 1)
+        if min_monster_dist <= 1:
+            return False
+
+        adj_walls = self._get_adjacent_walls(wrld, me.x, me.y)
+
+        # TRIGGER 1: Monster Ambush Gamble
+        # If a monster is within 2 to 4 steps, drop a bomb behind/around us to hope it walks into the blast
+        if 2 <= min_monster_dist <= 4:
+            return True
+
+        # TRIGGER 2: Demolition & Clearing
+        # If any soft wall is adjacent, blow it up (unblocks shortcuts, destroys barriers, gains score)
+        if adj_walls:
+            return True
+
+        # TRIGGER 3: Path to exit is blocked
         if exit_pos is not None:
             current_dist = self._astar_dist(wrld, pos, exit_pos)
             if current_dist >= 999:
                 return True
-
-            my_dist_to_exit = self._manhattan(pos, exit_pos)
-            for wx, wy in adj_walls:
-                if self._manhattan((wx, wy), exit_pos) < my_dist_to_exit:
-                    return True
-        else:
-            return True
 
         return False
 
@@ -156,18 +162,15 @@ class TestCharacter(CharacterEntity):
 
             next_world, events = step_world.next()
 
-            # 1. Event checks
             node_value = self._evaluate_events(next_world, events)
             if node_value is not None:
                 total_val += prob * node_value
                 continue
 
-            # 2. Escape detection (character is safely removed upon exiting)
             if next_world.me(self) is None:
                 total_val += prob * self.EXIT_BONUS
                 continue
 
-            # 3. Recurse or evaluate leaf
             if depth <= 1:
                 total_val += prob * self._heuristic(next_world, exit_pos)
             else:
@@ -197,6 +200,11 @@ class TestCharacter(CharacterEntity):
                 return self.EXIT_BONUS
             if e.tpe in (Event.CHARACTER_KILLED_BY_MONSTER, Event.BOMB_HIT_CHARACTER):
                 return self.DEATH_PENALTY
+            # Reward successful bomb hits on monsters or walls in lookahead
+            if e.tpe == Event.BOMB_HIT_MONSTER:
+                return 5000.0
+            if e.tpe == Event.BOMB_HIT_WALL:
+                return 300.0
         return None
 
     def _heuristic(self, wrld, exit_pos):
@@ -226,22 +234,18 @@ class TestCharacter(CharacterEntity):
             elif nearest_monster_dist <= 3:
                 score -= 50.0
 
-        # 3. ANTI-CORNERING / MOBILITY PENALTY
-        # If a monster is within threat range (<= 5 steps), penalize low-degree / tight dead-ends
+        # 3. Anti-Cornering / Mobility Check
         if nearest_monster_dist <= 5:
-            # Reward open tiles with multiple branch choices
             open_exits = self._open_neighbor_count(wrld, pos[0], pos[1])
             if open_exits <= 2:
-                score -= 150.0  # Tight hallway or dead-end mouth
+                score -= 150.0
             elif open_exits <= 3:
                 score -= 40.0
             else:
                 score += 10.0 * open_exits
 
-            # Check if this corridor leads to an actual cul-de-sac
             local_volume = self._reachable_space(wrld, pos, limit=7)
             if local_volume < 5:
-                # Severe penalty for stepping into a shallow dead-end pocket
                 score -= 300.0 / max(1, local_volume)
 
         # 4. Flee active bombs and ticking blasts
@@ -249,14 +253,17 @@ class TestCharacter(CharacterEntity):
             for y in range(wrld.height()):
                 bomb = wrld.bomb_at(x, y)
                 if bomb is not None:
+                    # In direct crosshairs
                     if (pos[0] == x or pos[1] == y) and self._manhattan(pos, (x, y)) <= 4:
                         timer = getattr(bomb, 'timer', 2)
                         score -= 3000.0 / max(1, timer)
 
         return score
-    
+
+    # ---------------------------------------------------------------
+    # Grid Utilities & Spatial Analysis
+    # ---------------------------------------------------------------
     def _open_neighbor_count(self, wrld, x, y):
-        """Returns the number of walkable adjacent tiles (cardinal + diagonal)."""
         count = 0
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
@@ -269,10 +276,8 @@ class TestCharacter(CharacterEntity):
         return count
 
     def _reachable_space(self, wrld, start, limit=8):
-        """Measures local escape volume: returns count of accessible tiles within limit steps."""
         queue = [start]
         visited = {start}
-        
         while queue and len(visited) < limit:
             curr = queue.pop(0)
             for dx in (-1, 0, 1):
@@ -286,9 +291,7 @@ class TestCharacter(CharacterEntity):
                             visited.add(nbr)
                             queue.append(nbr)
         return len(visited)
-    # ---------------------------------------------------------------
-    # Grid Utilities and Pathfinding
-    # ---------------------------------------------------------------
+
     def _find_exit(self, wrld):
         if hasattr(wrld, 'exitcell') and wrld.exitcell is not None:
             return wrld.exitcell
