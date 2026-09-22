@@ -103,7 +103,9 @@ class TestCharacter(CharacterEntity):
             sim_me = sim_branch.me(self)
             sim_me.move(*move)
 
-            value = self._chance(sim_branch, depth, exit_pos)
+            # value = self._chance(sim_branch, depth, exit_pos)
+            (next_world_copy, events) = sim_branch.next()
+            value = next_world_copy.scores["me"] - sim_branch.scores["me"]
             if value > best_value + 1e-5:
                 best_value = value
                 best_moves = [move]
@@ -389,10 +391,10 @@ class TestCharacter(CharacterEntity):
                     total += 5000.0
 
             elif e.tpe == Event.BOMB_HIT_MONSTER and mine:
-                total += 5000.0
+                total += 50.0
 
             elif e.tpe == Event.BOMB_HIT_WALL and mine:
-                total += 300.0
+                total += 10.0
 
         return total, False
 
