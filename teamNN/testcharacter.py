@@ -107,6 +107,7 @@ class TestCharacter(CharacterEntity):
             value = next_world_copy.scores["me"] - sim_branch.scores["me"]
             next_pos = [self.x+move[0], self.y+move[1]]
             value -= self._chebyshev(next_pos,exit_pos)
+            value -= 1/curr_min_m_dist
             if value > best_value + 1e-5:
                 best_value = value
                 best_moves = [move]
