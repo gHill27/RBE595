@@ -15,7 +15,7 @@ from colorama import Fore, Back
 
 
 class TestCharacter(CharacterEntity):
-    SEARCH_DEPTH = 3
+    SEARCH_DEPTH = 30
     FAR_SEARCH_DEPTH = 1
     ENGAGE_RADIUS = 4
     HUNT_RADIUS = 3
@@ -103,9 +103,10 @@ class TestCharacter(CharacterEntity):
             sim_me = sim_branch.me(self)
             sim_me.move(*move)
 
-            # value = self._chance(sim_branch, depth, exit_pos)
             (next_world_copy, events) = sim_branch.next()
             value = next_world_copy.scores["me"] - sim_branch.scores["me"]
+            next_pos = [self.x+move[0], self.y+move[1]]
+            value -= self._chebyshev(next_pos,exit_pos)
             if value > best_value + 1e-5:
                 best_value = value
                 best_moves = [move]
