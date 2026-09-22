@@ -6,19 +6,18 @@ sys.path.insert(1, '..')
 # Import necessary stuff
 import random
 from game import Game
-from monsters.selfpreserving_monster import SelfPreservingMonster
+from monsters.stupid_monster import StupidMonster
 
 # TODO This is your code!
-sys.path.insert(1, '../teamNN')
+sys.path.insert(1, '../team02')
 from testcharacter import TestCharacter
 
 # Create the game
-# random.seed(0) # TODO Change this if you want different random choices
+# random.seed(123) # TODO Change this if you want different random choices
 g = Game.fromfile('map.txt')
-g.add_monster(SelfPreservingMonster("selfpreserving", # name
-                                    "S",              # avatar
-                                    3, 9,             # position
-                                    1                 # detection range
+g.add_monster(StupidMonster("stupid", # name
+                            "S",      # avatar
+                            3, 9      # position
 ))
 
 # TODO Add your character
