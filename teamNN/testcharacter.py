@@ -15,7 +15,7 @@ from colorama import Fore, Back
 
 
 class TestCharacter(CharacterEntity):
-    SEARCH_DEPTH = 30
+    SEARCH_DEPTH = 10
     FAR_SEARCH_DEPTH = 1
     ENGAGE_RADIUS = 4
     HUNT_RADIUS = 3
@@ -85,7 +85,7 @@ class TestCharacter(CharacterEntity):
             return
 
         # Pure evasion override if actively threatened
-        if curr_min_m_dist <= 3:
+        if curr_min_m_dist <= 5:
             max_dist_available = max(d for _, d in scored_moves)
             candidate_moves = [mv for mv, d in scored_moves if d == max_dist_available]
         else:
@@ -107,7 +107,7 @@ class TestCharacter(CharacterEntity):
             value = next_world_copy.scores["me"] - sim_branch.scores["me"]
             next_pos = [self.x+move[0], self.y+move[1]]
             value -= self._chebyshev(next_pos,exit_pos)
-            value -= 1/curr_min_m_dist
+            value -= 4/(curr_min_m_dist*curr_min_m_dist)
             if value > best_value + 1e-5:
                 best_value = value
                 best_moves = [move]
@@ -187,8 +187,8 @@ class TestCharacter(CharacterEntity):
         pos = (me.x, me.y)
 
         min_m_dist = min((self._chebyshev(pos, m) for m in all_monsters), default=999)
-        if min_m_dist <= 3:
-            return False
+        if min_m_dist <= 6:
+            return True
 
         adj_walls = []
         for dx in (-1, 0, 1):
