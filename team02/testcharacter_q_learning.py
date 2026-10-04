@@ -46,12 +46,11 @@ class TestCharacter(CharacterEntity):
     def _is_bomb_active(self, wrld):
         return bool(wrld.bombs)
 
-    def define_state(self, wrld):
+    def define_state(self, wrld, distances_matrix):
         if self._is_bomb_active(wrld):
             self.state = State.Bomb
             return
-
-        distances_matrix = self.compute_distances(wrld.exitcell)
+        
         bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
         all_monsters = [
             (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
@@ -104,12 +103,17 @@ class TestCharacter(CharacterEntity):
                     
         return distances
     
-
+    def get_blocked_move(self,pos,goal):
+        distance_to_goal = self.manhattan_distance(pos,goal)
+        for neighbor in self.get_neighbors(pos):
+            if self.manhattan_distance(neighbor,goal) < distance_to_goal:
+                return self.get_blocked_move()
 
     def do(self, wrld):
         # Your code here
         self.wrld = wrld  # Store the world reference for use in A* algorithm
-        self.define_state(wrld)
+        distances_matrix = self.compute_distances(wrld.exitcell)
+        self.define_state(wrld,distances_matrix)
         pos = (self.x, self.y)
         goal = wrld.exitcell
         self.score = wrld.scores["me"]
@@ -124,7 +128,8 @@ class TestCharacter(CharacterEntity):
                 if self.path:
                     self.move(*self.get_move())  # skip analysis and just move
                 else:
-                    print("ERROR NO PATH!!!")
+                    self.move(*self.get_blocked_move())
+                    # print("ERROR NO PATH!!!")
                 return
 
             case State.Bomb:
