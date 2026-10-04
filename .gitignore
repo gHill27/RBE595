@@ -185,3 +185,6 @@ $RECYCLE.BIN/
 
 .venv/
 venv/
+.vscode/
+*.db
+*.db.lock
