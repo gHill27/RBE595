@@ -107,7 +107,9 @@ class TestCharacter(CharacterEntity):
         distance_to_goal = self.manhattan_distance(pos,goal)
         for neighbor in self.get_neighbors(pos):
             if self.manhattan_distance(neighbor,goal) < distance_to_goal:
-                return self.get_blocked_move()
+                return neighbor
+            else:
+                return pos
 
     def do(self, wrld):
         # Your code here
