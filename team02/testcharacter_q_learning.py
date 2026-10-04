@@ -12,6 +12,7 @@ from enum import Enum
 import numpy as np
 from collections import deque
 import os 
+import math
 
 class State(Enum):
     Free = 1
@@ -68,7 +69,7 @@ class TestCharacter(CharacterEntity):
                 self.state = State.Free
             elif abs(mdist - bomberman_dist_to_exit) <= 4: #close to monster!
                 self.state = State.Monster
-            else:
+            elif mdist > 0:
                 self.state = State.FarFromMonster
 
         print(f'{old_state} --> {self.state}')
@@ -109,12 +110,15 @@ class TestCharacter(CharacterEntity):
         return distances
     
     def get_blocked_move(self,pos,goal):
-        distance_to_goal = self.manhattan_distance(pos,goal)
+        distance_to_goal = math.dist(pos,goal)
+        best = pos
+        best_dist = distance_to_goal
         for neighbor in self.get_neighbors(pos):
-            if self.manhattan_distance(neighbor,goal) < distance_to_goal:
-                return neighbor
-            else:
-                return pos
+            if math.dist(neighbor,goal) < best_dist:
+                best = neighbor
+                best_dist = math.dist(neighbor,goal)
+        
+        return best
 
     def do(self, wrld):
         # Your code here
@@ -135,7 +139,7 @@ class TestCharacter(CharacterEntity):
                 if self.path:
                     self.move(*self.get_move())  # skip analysis and just move
                 else:
-                    self.move(*self.get_blocked_move())
+                    self.move(*self.get_blocked_move()) #this will probably never run but in case
                     # print("ERROR NO PATH!!!")
                 return
 
@@ -188,6 +192,8 @@ class TestCharacter(CharacterEntity):
 
             self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
             print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
+        else: 
+            self.move(*self.get_blocked_move(pos,goal))
 
             
     def get_move(self):
@@ -324,13 +330,13 @@ class TestCharacter(CharacterEntity):
             monsters.append(m[0].x)
             monsters.append(m[0].y)
 
-        if self.get_blocked_move() == pos : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
+        if self.get_blocked_move() == wrld.me(self) : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
             retval = True
 
         for value in self.path[:5]:
             if value in monsters:
                 retval = True
-                
+
         if retval:
             print('placing bomb!')
             pass

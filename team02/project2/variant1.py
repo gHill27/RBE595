@@ -8,7 +8,7 @@ from game import Game
 
 # TODO This is your code!
 sys.path.insert(1, '../team02')
-from testcharacter import TestCharacter
+from testcharacter_q_learning import TestCharacter
 
 
 # Create the game
@@ -21,4 +21,4 @@ g.add_character(TestCharacter("me", # name
 ))
 
 # Run!
-g.go()
+g.go(1)
