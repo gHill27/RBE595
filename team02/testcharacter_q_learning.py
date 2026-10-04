@@ -47,8 +47,11 @@ class TestCharacter(CharacterEntity):
         return bool(wrld.bombs)
 
     def define_state(self, wrld, distances_matrix):
+        print('this function is running ') #this is printing!!!
+        old_state = self.state
         if self._is_bomb_active(wrld):
             self.state = State.Bomb
+            print(f'{old_state} --> {self.state}')
             return
         
         bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
@@ -67,6 +70,8 @@ class TestCharacter(CharacterEntity):
                 self.state = State.Monster
             else:
                 self.state = State.FarFromMonster
+
+        print(f'{old_state} --> {self.state}')
 
     def compute_distances(self, start_cell):
         """
@@ -311,19 +316,26 @@ class TestCharacter(CharacterEntity):
     #BOMBING CODE:
     def should_bomb(self,wrld,pos) -> bool:
         """ Places a bomb if there is no path to the exit, a bomb would clear a new path to the exit that avoids the monster, or a monster is blocking the path"""
+        retval = False
         if not self.path:
-            return True #should place bomb no path to the exit  
+            retval = True #should place bomb no path to the exit  
         monsters = []
         for m in wrld.monsters.values():
             monsters.append(m[0].x)
             monsters.append(m[0].y)
 
         if self.get_blocked_move() == pos : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
-            return True
+            retval = True
 
         for value in self.path[:5]:
             if value in monsters:
-                return True        
+                retval = True
+                
+        if retval:
+            print('placing bomb!')
+            pass
+
+        return retval        
 
 
 
