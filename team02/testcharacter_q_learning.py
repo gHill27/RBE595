@@ -118,7 +118,8 @@ class TestCharacter(CharacterEntity):
                 best = neighbor
                 best_dist = math.dist(neighbor,goal)
         
-        return best
+        return(best[0] - pos[0] , best[1] - pos[1]) 
+        
 
     def do(self, wrld):
         # Your code here
