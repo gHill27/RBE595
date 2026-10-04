@@ -309,7 +309,7 @@ class TestCharacter(CharacterEntity):
                 weights[idx] = weight+learning_rate*delta*features[idx]
         
     #BOMBING CODE:
-    def should_bomb(self,wrld) -> bool:
+    def should_bomb(self,wrld,pos) -> bool:
         """ Places a bomb if there is no path to the exit, a bomb would clear a new path to the exit that avoids the monster, or a monster is blocking the path"""
         if not self.path:
             return True #should place bomb no path to the exit  
@@ -318,17 +318,12 @@ class TestCharacter(CharacterEntity):
             monsters.append(m[0].x)
             monsters.append(m[0].y)
 
-        if True: #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
-            pass
-
+        if self.get_blocked_move() == pos : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
+            return True
 
         for value in self.path[:5]:
             if value in monsters:
-                return True
-
-        
-        pass
-
+                return True        
 
 
 
