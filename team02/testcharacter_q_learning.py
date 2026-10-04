@@ -12,6 +12,8 @@ from enum import Enum
 import numpy as np
 from collections import deque
 import os 
+import random
+import math
 
 class State(Enum):
     Free = 1
@@ -36,12 +38,16 @@ class TestCharacter(CharacterEntity):
             self.monster_weights = q_weights["Monster"]
             self.far_weights = q_weights["Far"]
 
-        self.learning_rate = 0.9 # for Q-learning update step
+        self.learning_rate = 0.001 # for Q-learning update step
         self.gamma = 0.9 # future rewards discount factor
-
-        # load q-table from q_table.json
-        with open("q_table.json") as f:
-            self.q_table = json.load(f)
+        # probability for trying unexplored moves
+        self.exploration_prob = 0.10
+        # when to start avoiding monsters
+        self.monster_avoid_distance = 10
+        # feature for walls destroyed
+        self.walls_destroyed = 0
+        # current weight set
+        self.weights = None
     
     def _is_bomb_active(self, wrld):
         return bool(wrld.bombs)
@@ -113,7 +119,7 @@ class TestCharacter(CharacterEntity):
         pos = (self.x, self.y)
         goal = wrld.exitcell
         self.score = wrld.scores["me"]
-
+        self.danger_mask = self._compute_danger_mask(wrld, self.wrld.width(), self.wrld.height())
        
         name: str = None
         weight: dict = None
@@ -130,62 +136,68 @@ class TestCharacter(CharacterEntity):
             case State.Bomb:
                 weight = self.bomb_weights 
                 name = "Bomb"
+                self.weights = self.bomb_weights
 
             case State.FarFromMonster:
                 weight = self.far_weights
                 name = "Far"
+                self.weights = self.far_weights
 
             case State.Monster:
                 weight = self.monster_weights
                 name = "Monster"
-            
+                self.weights = self.monster_weights
+
         if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
             Astar_path = self.Astar(pos, goal)
             self.path = Astar_path[1:]  # Skip the first position since it's the current position
-        if self.path:
-            self.move(*self.get_move())  # Move according to the next step in the path
-
-            # calculate reward gained from the move
-            reward = wrld.scores["me"] - self.score
-            self.score = wrld.scores["me"]
-
-            # sample Q-values from the list of possible moves
-            # and choose the action with the highest value
-            features = self.get_state_features(wrld)
-            Q = 0
-            for weight in self.q_weights:
-                for feature_value in features:
-                    Q += weight*feature_value
-
-            state_action_pair = self.get_state(wrld)
-            action = self.get_move()
-            # add action to stat
-            state_action_pair.append(action[0])
-            state_action_pair.append(action[1])
-            # q-table is a dictionary indexed by state-action pairs
-            # convert state_action_list to a string
-            state_action_pair = "".join(map(str,state_action_pair))
-            # update q-table with state-action pair and its Q-value
-            self.q_table[state_action_pair] = Q
-
-            self.Q_value_update(reward, self.learning_rate, weight, wrld, self.gamma)
-            self.update_weight_category(name,weight) #updates the respective name in the json
-            # update q-table
-            with open("q_table.json", "w") as f:
-                json.dump(self.q_table, f)
-
+        else:
+            move = self.get_move()  # Move according to the next step in the path
+            if move == (0, 0):
+                self.place_bomb()
+            else:
+                self.move(*move)
+            self.update_weights(name)
             self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
             print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
 
-            
     def get_move(self):
         if self.path:
-            next_step = self.path.pop(0)
-            dx = next_step[0] - self.x
-            dy = next_step[1] - self.y
-            return dx, dy
+            best_move = self.path.pop(0)
         else:
-            return 0, 0  # No movement if path is empty
+            best_move = self.get_blocked_move((self.x, self.y),self.wrld.exitcell)
+        Qs = []
+        neighbors = self.get_neighbors((self.x, self.y))
+        unexplored = []
+        for move in neighbors:
+            # compute Q-value
+            features = self.get_state_features(self.wrld)
+            Q = 0.0
+            # print("self.weights: " + str(self.weights))
+            for idx, weight in enumerate(self.weights):
+                Q += weight*(1/(features[idx]+1))
+            
+            if Q > max(Qs,default=0) and Q > 0:
+                Qs.append(Q)
+                best_move = move
+            # else:
+            #     # add first Q value if Qs is empty
+            #     Qs.append(Q)
+            #     best_move = move
+        # explore areas with no known Q-value with some probability exploration_prob
+        if random.random() < self.exploration_prob:
+            if unexplored:
+                print("random unexplored move")
+                best_move = unexplored[int(random.random()*(len(unexplored)))]
+        if not best_move:
+            print("random move")
+            best_move = neighbors[int(random.random()*(len(neighbors)))]
+        next_step = best_move
+        dx = next_step[0] - self.x
+        dy = next_step[1] - self.y
+        Astar_path = self.Astar((next_step[0], next_step[1]), self.wrld.exitcell)
+        self.path = Astar_path[1:]  # recompute A*
+        return dx, dy
 
     def Astar(self, pos, goal):
         start_time = time.perf_counter()
@@ -258,24 +270,65 @@ class TestCharacter(CharacterEntity):
     def manhattan_distance(self, a, b):
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-    def get_state_features(self, wrld, weights):
+    def get_state_features(self, wrld):
         current_world = SensedWorld.from_world(wrld)
         next_world, events = current_world.next()
 
         monster_current_distances = []
-        monster_next_distances = []
-        if current_world.monsters and next_world.monsters:
-            # compute list of monster distances for this and the next step of the game
+        if current_world.monsters:
+            # compute list of monster distances for this step of the game
             for m_current in current_world.monsters.values():
-                for m_next in next_world.monsters.values():
-                    monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
-                    monster_next_distances.append(self.manhattan_distance([m_next[0].x,m_next[0].y], [self.x,self.y]))
+                monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
+        min_monster_distance = 0
+        for dist in monster_current_distances:
+            if not min_monster_distance:
+                # initialize first monster
+                min_monster_distance = dist
+            if dist < min_monster_distance:
+                min_monster_distance = dist
+        if min_monster_distance > self.monster_avoid_distance:
+            min_monster_distance = 0
 
-        # if the feature vector is not the same length as the q_weights vector then pad it with zeros
-        # this will happen when there are variable number of monsters between game variants
-        features = monster_current_distances+monster_next_distances
-        if len(features) < len(weights):
-            features = features + [0]*(len(weights)-len(features))
+
+        bomb_distances = []
+        # feature for distance to closest bomb within 2 timesteps of explosion
+        for bomb in wrld.bombs.values():
+            timer = getattr(bomb, 'timer', 2)
+            if timer <= 5:
+                bomb_distances.append(self.manhattan_distance([bomb.x,bomb.y], [self.x,self.y]))
+
+        feature_min_bomb_dist = min(bomb_distances,default=0)
+
+        expl_distances = []
+        # feature for distance to explosion
+        for expl in wrld.explosions.values():
+            if 0 <= expl.x < self.wrld.width() and 0 <= expl.y < self.wrld.height():
+                expl_distances.append(self.manhattan_distance([expl.x,expl.y], [self.x,self.y]))
+
+        feature_min_expl_dist = min(expl_distances,default=0)
+
+        adj_walls = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = self.x + dx, self.y + dy
+                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and wrld.wall_at(nx, ny):
+                    adj_walls.append((nx, ny))
+        # not using this feature anymore\
+        # feature_adjacent_walls = len(adj_walls)
+
+        # not using this feature anymore\
+        # feature_walls_destroyed = self.walls_destroyed
+
+        # feature_danger_mask = int(self.danger_mask[(self.x-1),(self.y-1)])
+        feature_monster_dist = min_monster_distance
+        exit_location = self.wrld.exitcell
+        exit_dist = self.manhattan_distance([exit_location[0],exit_location[1]], [self.x,self.y])
+        feature_exit_dist = exit_dist
+        features = monster_current_distances
+        features = [feature_exit_dist, feature_min_bomb_dist, feature_min_expl_dist, feature_monster_dist]
+
         # return a list of the features
         return features
 
@@ -314,16 +367,11 @@ class TestCharacter(CharacterEntity):
         if True: #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
             pass
 
-
         for value in self.path[:5]:
             if value in monsters:
                 return True
 
-        
         pass
-
-
-
 
     def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
         # 1. Load existing file if it exists, otherwise start with a fresh structure
@@ -347,4 +395,61 @@ class TestCharacter(CharacterEntity):
         with open(filename, "w") as f:
             json.dump(data, f, indent=2)
 
-    
+    def _compute_danger_mask(self, wrld, width, height):
+            danger = np.zeros((height, width), dtype=bool)
+
+            for expl in wrld.explosions.values():
+                if 0 <= expl.x < width and 0 <= expl.y < height:
+                    danger[expl.y, expl.x] = True
+
+            for bomb in wrld.bombs.values():
+                timer = getattr(bomb, 'timer', 2)
+                if timer <= 2:
+                    self._mask_blast(wrld, bomb.x, bomb.y, width, height, danger)
+
+            return danger
+
+    def _mask_blast(self, wrld, bx, by, width, height, danger):
+        danger[by, bx] = True
+        expl_range = getattr(wrld, 'expl_range', 4)
+        for dx, dy in ((-1,0), (1,0), (0,-1), (0,1)):
+            for r in range(1, expl_range + 1):
+                nx, ny = bx + dx * r, by + dy * r
+                if not (0 <= nx < width and 0 <= ny < height):
+                    break
+                danger[ny, nx] = True
+                if wrld.wall_at(nx, ny):
+                    break
+
+    def update_weights(self, name):
+        # calculate reward gained from the move
+        reward = self.wrld.scores["me"] - self.score
+        self.score = self.wrld.scores["me"]
+
+        # sample Q-values from the list of possible moves
+        # and choose the action with the highest value
+        features = self.get_state_features(self.wrld)
+        Q = 0.0
+        print("self.weights: " + str(self.weights))
+        for idx, weight in enumerate(self.weights):
+            Q += weight*(1/(features[idx]+1))
+
+        # Update weights
+        current_world = SensedWorld.from_world(self.wrld)
+        next_world, _ = current_world.next()
+        next_reward = next_world.scores["me"] - self.score
+        delta = (reward + self.gamma*next_reward) - Q
+        for idx, weight in enumerate(self.weights):
+            self.weights[idx] = weight+self.learning_rate*delta*features[idx]
+        self.update_weight_category(name,self.weights) #updates the respective name in the json
+
+    def get_blocked_move(self,pos,goal):
+        distance_to_goal = math.dist(pos,goal)
+        best = pos
+        best_dist = distance_to_goal
+        for neighbor in self.get_neighbors(pos):
+            if math.dist(neighbor,goal) < best_dist:
+                best = neighbor
+                best_dist = math.dist(neighbor,goal)
+        
+        return best
