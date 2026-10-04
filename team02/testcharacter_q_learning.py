@@ -29,7 +29,7 @@ class TestCharacter(CharacterEntity):
         self.path = []  # Initialize path list
         self.time = 0  # Initialize time variable
         self.score = 0 # Initialize score
-        self.state: State = State.FarFromMonster #starts assuming it has a monster in the way far away.
+        self.state: State = State.Free #starts assuming it has an empty environment
 
         # load weights from q_learning_weights.json
         with open("q_learning_weights.json") as f:
@@ -38,12 +38,12 @@ class TestCharacter(CharacterEntity):
             self.monster_weights = q_weights["Monster"]
             self.far_weights = q_weights["Far"]
 
-        self.learning_rate = 0.001 # for Q-learning update step
+        self.learning_rate = 0.01 # for Q-learning update step
         self.gamma = 0.9 # future rewards discount factor
         # probability for trying unexplored moves
-        self.exploration_prob = 0.10
-        # when to start avoiding monsters
-        self.monster_avoid_distance = 10
+        self.exploration_prob = 0.0
+        # when to start considering monsters
+        self.monster_avoid_distance = 5
         # feature for walls destroyed
         self.walls_destroyed = 0
         # current weight set
@@ -52,12 +52,12 @@ class TestCharacter(CharacterEntity):
     def _is_bomb_active(self, wrld):
         return bool(wrld.bombs)
 
-    def define_state(self, wrld):
+    def define_state(self, wrld, distances_matrix):
+        old_state = self.state
         if self._is_bomb_active(wrld):
             self.state = State.Bomb
             return
-
-        distances_matrix = self.compute_distances(wrld.exitcell)
+        
         bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
         all_monsters = [
             (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
@@ -72,7 +72,7 @@ class TestCharacter(CharacterEntity):
                 self.state = State.Free
             elif abs(mdist - bomberman_dist_to_exit) <= 4: #close to monster!
                 self.state = State.Monster
-            else:
+            elif mdist > 0:
                 self.state = State.FarFromMonster
 
     def compute_distances(self, start_cell):
@@ -115,7 +115,8 @@ class TestCharacter(CharacterEntity):
     def do(self, wrld):
         # Your code here
         self.wrld = wrld  # Store the world reference for use in A* algorithm
-        self.define_state(wrld)
+        distances_matrix = self.compute_distances(wrld.exitcell)
+        self.define_state(wrld,distances_matrix)
         pos = (self.x, self.y)
         goal = wrld.exitcell
         self.score = wrld.scores["me"]
@@ -152,18 +153,27 @@ class TestCharacter(CharacterEntity):
             Astar_path = self.Astar(pos, goal)
             self.path = Astar_path[1:]  # Skip the first position since it's the current position
         else:
-            move = self.get_move()  # Move according to the next step in the path
-            if move == (0, 0):
+            print("self.should bomb: " + str(self.should_bomb(wrld,pos)))
+            if self.should_bomb(wrld,pos):
                 self.place_bomb()
             else:
+                move = self.get_move()  # Move according to the next step in the path
+                # if move == (0, 0) and self.should_bomb(wrld,pos):
                 self.move(*move)
-            self.update_weights(name)
+                self.update_weights(name)
             self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
             print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
 
     def get_move(self):
+        print("self.state: " + str(self.state))
         if self.path:
             best_move = self.path.pop(0)
+            if self.state == State.Free:
+                # no need to look at Q-values if we have a free path to the exit
+                next_step = best_move
+                dx = next_step[0] - self.x
+                dy = next_step[1] - self.y
+                return dx, dy
         else:
             best_move = self.get_blocked_move((self.x, self.y),self.wrld.exitcell)
         Qs = []
@@ -173,12 +183,16 @@ class TestCharacter(CharacterEntity):
             # compute Q-value
             features = self.get_state_features(self.wrld)
             Q = 0.0
-            # print("self.weights: " + str(self.weights))
             for idx, weight in enumerate(self.weights):
-                Q += weight*(1/(features[idx]+1))
+                if idx == 4:
+                    # feature_danger_mask boolean feature
+                    Q += weight*features[idx]
+                else:
+                    Q += weight*(1/(features[idx]+1))
             
             if Q > max(Qs,default=0) and Q > 0:
                 Qs.append(Q)
+                print("taking best Q move")
                 best_move = move
             # else:
             #     # add first Q value if Qs is empty
@@ -186,17 +200,12 @@ class TestCharacter(CharacterEntity):
             #     best_move = move
         # explore areas with no known Q-value with some probability exploration_prob
         if random.random() < self.exploration_prob:
-            if unexplored:
-                print("random unexplored move")
-                best_move = unexplored[int(random.random()*(len(unexplored)))]
+            best_move = (self.x, self.y)
         if not best_move:
-            print("random move")
-            best_move = neighbors[int(random.random()*(len(neighbors)))]
+            best_move = (self.x, self.y)
         next_step = best_move
         dx = next_step[0] - self.x
         dy = next_step[1] - self.y
-        Astar_path = self.Astar((next_step[0], next_step[1]), self.wrld.exitcell)
-        self.path = Astar_path[1:]  # recompute A*
         return dx, dy
 
     def Astar(self, pos, goal):
@@ -248,7 +257,8 @@ class TestCharacter(CharacterEntity):
         x, y = pos
         neighbors = []
         # Inline checks to avoid extra function call overhead
-        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1), (x, y),
+                       (x + 1, y + 1), (x - 1, y - 1)):
             if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
                 neighbors.append((nx, ny))
         return neighbors
@@ -288,7 +298,7 @@ class TestCharacter(CharacterEntity):
                 min_monster_distance = dist
         if min_monster_distance > self.monster_avoid_distance:
             min_monster_distance = 0
-
+        feature_monster_dist = min_monster_distance
 
         bomb_distances = []
         # feature for distance to closest bomb within 2 timesteps of explosion
@@ -321,57 +331,54 @@ class TestCharacter(CharacterEntity):
         # not using this feature anymore\
         # feature_walls_destroyed = self.walls_destroyed
 
-        # feature_danger_mask = int(self.danger_mask[(self.x-1),(self.y-1)])
+        feature_danger_mask = int(self.danger_mask[(self.y),(self.x)])
         feature_monster_dist = min_monster_distance
         exit_location = self.wrld.exitcell
         exit_dist = self.manhattan_distance([exit_location[0],exit_location[1]], [self.x,self.y])
         feature_exit_dist = exit_dist
         features = monster_current_distances
-        features = [feature_exit_dist, feature_min_bomb_dist, feature_min_expl_dist, feature_monster_dist]
+        features = [feature_exit_dist, feature_min_bomb_dist, feature_min_expl_dist, feature_monster_dist, feature_danger_mask]
+        # print("feature_exit_dist: " + str(feature_exit_dist))
+        # print("feature_min_bomb_dist: " + str(feature_min_bomb_dist))
+        # print("feature_min_expl_dist: " + str(feature_min_expl_dist))
+        # print("feature_monster_dist: " + str(feature_monster_dist))
+        # print("feature_danger_mask: " + str(feature_danger_mask))
 
         # return a list of the features
         return features
 
-    def get_state(self, wrld):
-        # state is the position of all of the entities in the game
-        state = []
-        for m in wrld.monsters.values():
-            state.append(m[0].x)
-            state.append(m[0].y)
-        return state + [self.x,self.y]
-
-    def Q_value_update(self, reward, learning_rate, *weights, wrld, gamma):
-        features = self.get_state_features(wrld, weights)
-        if features:
-            Q = 0
-            for weight in weights:
-                for feature_value in features:
-                    Q += weight*feature_value
-            current_world = SensedWorld.from_world(wrld)
-            next_world, _ = current_world.next()
-            next_reward = next_world.scores["me"] - self.score
-            delta = (reward + gamma*next_reward) - Q
-            for idx, weight in enumerate(weights):
-                weights[idx] = weight+learning_rate*delta*features[idx]
-        
     #BOMBING CODE:
-    def should_bomb(self,wrld) -> bool:
+    def should_bomb(self,wrld,pos) -> bool:
         """ Places a bomb if there is no path to the exit, a bomb would clear a new path to the exit that avoids the monster, or a monster is blocking the path"""
+        retval = False
         if not self.path:
-            return True #should place bomb no path to the exit  
+            retval = True #should place bomb no path to the exit  
         monsters = []
         for m in wrld.monsters.values():
             monsters.append(m[0].x)
             monsters.append(m[0].y)
 
-        if True: #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
-            pass
+        if self.get_blocked_move(pos,wrld.exitcell) == (0,0) : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
+            retval = True
+        monster_current_distances = []
+        if wrld.monsters:
+            # compute list of monster distances for this step of the game
+            for m_current in wrld.monsters.values():
+                monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
+            min_monster_distance = 0
+            for dist in monster_current_distances:
+                if not min_monster_distance:
+                    # initialize first monster
+                    min_monster_distance = dist
+                if dist < min_monster_distance:
+                    min_monster_distance = dist
+            if min_monster_distance < self.monster_avoid_distance:
+                retval = True
 
-        for value in self.path[:5]:
-            if value in monsters:
-                return True
-
-        pass
+        if retval:
+            print('placing bomb!')
+        
+        return retval
 
     def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
         # 1. Load existing file if it exists, otherwise start with a fresh structure
@@ -430,15 +437,20 @@ class TestCharacter(CharacterEntity):
         # and choose the action with the highest value
         features = self.get_state_features(self.wrld)
         Q = 0.0
-        print("self.weights: " + str(self.weights))
         for idx, weight in enumerate(self.weights):
-            Q += weight*(1/(features[idx]+1))
+            if idx == 4:
+                # feature_danger_mask boolean feature
+                Q += weight*features[idx]
+            else:
+                Q += weight*(1/(features[idx]+1))
 
         # Update weights
         current_world = SensedWorld.from_world(self.wrld)
         next_world, _ = current_world.next()
         next_reward = next_world.scores["me"] - self.score
         delta = (reward + self.gamma*next_reward) - Q
+        print("reward: " + str(reward))
+        print("next_reward: " + str(next_reward))
         for idx, weight in enumerate(self.weights):
             self.weights[idx] = weight+self.learning_rate*delta*features[idx]
         self.update_weight_category(name,self.weights) #updates the respective name in the json
@@ -453,3 +465,38 @@ class TestCharacter(CharacterEntity):
                 best_dist = math.dist(neighbor,goal)
         
         return best
+
+    def compute_distances(self, start_cell):
+        """
+        Computes shortest path distances from a start cell using existing class helpers.
+        :param start_cell: Tuple of (x, y)
+        :return: 2D NumPy array of distances (shape: height x width)
+        """
+        width = self.wrld.width()
+        height = self.wrld.height()
+        
+        # Initialize distance array with -1 (unreachable/walls)
+        # Shape is (height, width) so we index as [y, x]
+        distances = np.full((height, width), -1, dtype=int)
+        
+        # Validate start position using your existing helper
+        if not self.is_valid_move(start_cell):
+            return distances  # Start is out of bounds or a wall
+
+        sx, sy = start_cell
+        queue = deque([start_cell])
+        distances[sy, sx] = 0  # y = row, x = col
+        
+        while queue:
+            curr_pos = queue.popleft()
+            cx, cy = curr_pos
+            curr_dist = distances[cy, cx]
+            
+            # Leverage your optimized get_neighbors method
+            for nx, ny in self.get_neighbors(curr_pos):
+                # Check if unvisited in our distance map
+                if distances[ny, nx] == -1:
+                    distances[ny, nx] = curr_dist + 1
+                    queue.append((nx, ny))
+                    
+        return distances

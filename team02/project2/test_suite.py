@@ -3,6 +3,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 variants = ["variant1_map2.py", "variant2_map2.py", "variant3_map2.py", "variant4_map2.py", "variant5_map2.py"]
+# variants = ["variant1.py", "variant2.py", "variant3.py", "variant4.py", "variant5.py"]
 variant_wins = [0]*len(variants)
 num_batches_per_variant = [10]*len(variants)
 num_thread_workers = 1
