@@ -11,6 +11,7 @@ import json
 from enum import Enum
 import numpy as np
 from collections import deque
+import os 
 
 class State(Enum):
     Free = 1
@@ -113,6 +114,9 @@ class TestCharacter(CharacterEntity):
         goal = wrld.exitcell
         self.score = wrld.scores["me"]
 
+       
+        name: str = None
+        weight: dict = None
         #state logic:
         match self.state:
             case State.Free:
@@ -125,12 +129,15 @@ class TestCharacter(CharacterEntity):
 
             case State.Bomb:
                 weight = self.bomb_weights 
+                name = "Bomb"
 
             case State.FarFromMonster:
                 weight = self.far_weights
+                name = "Far"
 
             case State.Monster:
                 weight = self.monster_weights
+                name = "Monster"
             
         if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
             Astar_path = self.Astar(pos, goal)
@@ -161,8 +168,8 @@ class TestCharacter(CharacterEntity):
             # update q-table with state-action pair and its Q-value
             self.q_table[state_action_pair] = Q
 
-            self.Q_value_update(reward, self.learning_rate, self.q_weights, wrld, self.gamma)
-
+            self.Q_value_update(reward, self.learning_rate, weight, wrld, self.gamma)
+            self.update_weight_category(name,weight) #updates the respective name in the json
             # update q-table
             with open("q_table.json", "w") as f:
                 json.dump(self.q_table, f)
@@ -251,7 +258,7 @@ class TestCharacter(CharacterEntity):
     def manhattan_distance(self, a, b):
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-    def get_state_features(self, wrld):
+    def get_state_features(self, wrld, weights):
         current_world = SensedWorld.from_world(wrld)
         next_world, events = current_world.next()
 
@@ -267,8 +274,8 @@ class TestCharacter(CharacterEntity):
         # if the feature vector is not the same length as the q_weights vector then pad it with zeros
         # this will happen when there are variable number of monsters between game variants
         features = monster_current_distances+monster_next_distances
-        if len(features) < len(self.q_weights):
-            features = features + [0]*(len(self.q_weights)-len(features))
+        if len(features) < len(weights):
+            features = features + [0]*(len(weights)-len(features))
         # return a list of the features
         return features
 
@@ -280,8 +287,8 @@ class TestCharacter(CharacterEntity):
             state.append(m[0].y)
         return state + [self.x,self.y]
 
-    def Q_value_update(self, reward, learning_rate, weights, wrld, gamma):
-        features = self.get_state_features(wrld)
+    def Q_value_update(self, reward, learning_rate, *weights, wrld, gamma):
+        features = self.get_state_features(wrld, weights)
         if features:
             Q = 0
             for weight in weights:
@@ -293,14 +300,51 @@ class TestCharacter(CharacterEntity):
             delta = (reward + gamma*next_reward) - Q
             for idx, weight in enumerate(weights):
                 weights[idx] = weight+learning_rate*delta*features[idx]
+        
+    #BOMBING CODE:
+    def should_bomb(self,wrld) -> bool:
+        """ Places a bomb if there is no path to the exit, a bomb would clear a new path to the exit that avoids the monster, or a monster is blocking the path"""
+        if not self.path:
+            return True #should place bomb no path to the exit  
+        monsters = []
+        for m in wrld.monsters.values():
+            monsters.append(m[0].x)
+            monsters.append(m[0].y)
 
-        # Update weights
-        self.q_weights = weights
+        if True: #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
+            pass
+
+
+        for value in self.path[:5]:
+            if value in monsters:
+                return True
 
         
+        pass
 
-        # update weights in json
-        update = dict()
-        update["weights"] = self.q_weights
-        with open("q_learning_weights.json", "w") as f:
-            json.dump(update, f)
+
+
+
+    def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
+        # 1. Load existing file if it exists, otherwise start with a fresh structure
+        if os.path.exists(filename):
+            with open(filename, "r") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    data = {"weights": {}}
+        else:
+            data = {"weights": {}}
+
+        # 2. Make sure the "weights" dictionary exists inside the JSON
+        if "weights" not in data:
+            data["weights"] = {}
+
+        # 3. Update only the specific category (e.g., "Monster")
+        data["weights"][category_name] = new_weights
+
+        # 4. Save the updated data back to the file with nice formatting (indent=2)
+        with open(filename, "w") as f:
+            json.dump(data, f, indent=2)
+
+    
