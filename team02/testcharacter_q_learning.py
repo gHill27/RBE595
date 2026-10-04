@@ -129,6 +129,8 @@ class TestCharacter(CharacterEntity):
         pos = (self.x, self.y)
         goal = wrld.exitcell
         self.score = wrld.scores["me"]
+        if self.should_bomb(wrld,pos):
+            self.place_bomb()
 
        
         name: str = None
@@ -331,7 +333,7 @@ class TestCharacter(CharacterEntity):
             monsters.append(m[0].x)
             monsters.append(m[0].y)
 
-        if self.get_blocked_move() == wrld.me(self) : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
+        if self.get_blocked_move(pos,wrld.exitcell) == (0,0) : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
             retval = True
 
         for value in self.path[:5]:
