@@ -1,0 +1,6 @@
+{
+   "python.analysis.extraPaths": ["$RBE595/bomberman"],
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
+        "reportMissingModuleSource": "none"}
+}

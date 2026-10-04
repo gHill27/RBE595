@@ -8,15 +8,110 @@ from colorama import Fore, Back
 import heapq
 import time
 import json
+from enum import Enum
+import numpy as np
+from collections import deque
+
+class State(Enum):
+    Free = 1
+    Monster = 2
+    FarFromMonster = 3
+    Bomb = 4
+
 
 class TestCharacter(CharacterEntity):
+    def __init__(self, name, avatar, x, y):
+        super().__init__(name, avatar, x, y)
+        self.wrld = None  # Initialize world reference
+        self.path = []  # Initialize path list
+        self.time = 0  # Initialize time variable
+        self.score = 0 # Initialize score
+        self.state: State = State.FarFromMonster #starts assuming it has a monster in the way far away.
+
+        # load weights from q_learning_weights.json
+        with open("q_learning_weights.json") as f:
+            self.q_weights = json.load(f)["weights"]
+
+        self.learning_rate = 0.9 # for Q-learning update step
+        self.gamma = 0.9 # future rewards discount factor
+
+        # load q-table from q_table.json
+        with open("q_table.json") as f:
+            self.q_table = json.load(f)
+    
+    def _is_bomb_active(self, wrld):
+        return bool(wrld.bombs)
+
+    def define_state(self, wrld):
+        if self._is_bomb_active(wrld):
+            self.state = State.Bomb
+            return
+
+        distances_matrix = self.compute_distances(wrld.exitcell)
+        bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
+        all_monsters = [
+            (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
+        ]
+        monster_distances = []
+
+        for monster in all_monsters:
+            monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
+        
+        for mdist in monster_distances: #TODO: Fix implementation to actually work with multiple monsters!!
+            if bomberman_dist_to_exit - mdist < 0: 
+                self.state = State.Free
+            elif abs(mdist - bomberman_dist_to_exit) <= 4: #close to monster!
+                self.state = State.Monster
+            else:
+                self.state = State.FarFromMonster
+
+    def compute_distances(self, start_cell):
+        """
+        Computes shortest path distances from a start cell using existing class helpers.
+        :param start_cell: Tuple of (x, y)
+        :return: 2D NumPy array of distances (shape: height x width)
+        """
+        width = self.wrld.width()
+        height = self.wrld.height()
+        
+        # Initialize distance array with -1 (unreachable/walls)
+        # Shape is (height, width) so we index as [y, x]
+        distances = np.full((height, width), -1, dtype=int)
+        
+        # Validate start position using your existing helper
+        if not self.is_valid_move(start_cell):
+            return distances  # Start is out of bounds or a wall
+
+        sx, sy = start_cell
+        queue = deque([start_cell])
+        distances[sy, sx] = 0  # y = row, x = col
+        
+        while queue:
+            curr_pos = queue.popleft()
+            cx, cy = curr_pos
+            curr_dist = distances[cy, cx]
+            
+            # Leverage your optimized get_neighbors method
+            for nx, ny in self.get_neighbors(curr_pos):
+                # Check if unvisited in our distance map
+                if distances[ny, nx] == -1:
+                    distances[ny, nx] = curr_dist + 1
+                    queue.append((nx, ny))
+                    
+        return distances
+    
+
 
     def do(self, wrld):
         # Your code here
         self.wrld = wrld  # Store the world reference for use in A* algorithm
+        self.define_state(wrld)
         pos = (self.x, self.y)
         goal = wrld.exitcell
         self.score = wrld.scores["me"]
+
+        #state logic:
+        
 
         if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
             Astar_path = self.Astar(pos, goal)
@@ -56,20 +151,6 @@ class TestCharacter(CharacterEntity):
             self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
             print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
 
-    def __init__(self, name, avatar, x, y):
-        super().__init__(name, avatar, x, y)
-        self.wrld = None  # Initialize world reference
-        self.path = []  # Initialize path list
-        self.time = 0  # Initialize time variable
-        self.score = 0 # Initialize score
-        # load weights from q_learning_weights.json
-        with open("q_learning_weights.json") as f:
-            self.q_weights = json.load(f)["weights"]
-        self.learning_rate = 0.9 # for Q-learning update step
-        self.gamma = 0.9 # future rewards discount factor
-        # load q-table from q_table.json
-        with open("q_table.json") as f:
-            self.q_table = json.load(f)
             
     def get_move(self):
         if self.path:
