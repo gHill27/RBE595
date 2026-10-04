@@ -30,7 +30,10 @@ class TestCharacter(CharacterEntity):
 
         # load weights from q_learning_weights.json
         with open("q_learning_weights.json") as f:
-            self.q_weights = json.load(f)["weights"]
+            q_weights = json.load(f)["weights"]
+            self.bomb_weights = q_weights["Bomb"]
+            self.monster_weights = q_weights["Monster"]
+            self.far_weights = q_weights["Far"]
 
         self.learning_rate = 0.9 # for Q-learning update step
         self.gamma = 0.9 # future rewards discount factor
@@ -111,8 +114,24 @@ class TestCharacter(CharacterEntity):
         self.score = wrld.scores["me"]
 
         #state logic:
-        
+        match self.state:
+            case State.Free:
+                self.path = self.Astar(pos,goal)[1:]
+                if self.path:
+                    self.move(*self.get_move())  # skip analysis and just move
+                else:
+                    print("ERROR NO PATH!!!")
+                return
 
+            case State.Bomb:
+                weight = self.bomb_weights 
+
+            case State.FarFromMonster:
+                weight = self.far_weights
+
+            case State.Monster:
+                weight = self.monster_weights
+            
         if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
             Astar_path = self.Astar(pos, goal)
             self.path = Astar_path[1:]  # Skip the first position since it's the current position
