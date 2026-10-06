@@ -67,7 +67,8 @@ class TestCharacter(CharacterEntity):
         for monster in all_monsters:
             monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
         
-        for mdist in monster_distances: #TODO: Fix implementation to actually work with multiple monsters!!
+        mdist = self.get_min_monster_dist(self.wrld)
+        if mdist:
             if bomberman_dist_to_exit - mdist < 0: 
                 self.state = State.Free
             elif abs(mdist - bomberman_dist_to_exit) <= 4: #close to monster!
@@ -184,11 +185,7 @@ class TestCharacter(CharacterEntity):
             features = self.get_state_features(self.wrld)
             Q = 0.0
             for idx, weight in enumerate(self.weights):
-                if idx == 4:
-                    # feature_danger_mask boolean feature
-                    Q += weight*features[idx]
-                else:
-                    Q += weight*(1/(features[idx]+1))
+                Q += weight*(1/(features[idx]+1))
             
             if Q > max(Qs,default=0) and Q > 0:
                 Qs.append(Q)
@@ -284,21 +281,7 @@ class TestCharacter(CharacterEntity):
         current_world = SensedWorld.from_world(wrld)
         next_world, events = current_world.next()
 
-        monster_current_distances = []
-        if current_world.monsters:
-            # compute list of monster distances for this step of the game
-            for m_current in current_world.monsters.values():
-                monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
-        min_monster_distance = 0
-        for dist in monster_current_distances:
-            if not min_monster_distance:
-                # initialize first monster
-                min_monster_distance = dist
-            if dist < min_monster_distance:
-                min_monster_distance = dist
-        if min_monster_distance > self.monster_avoid_distance:
-            min_monster_distance = 0
-        feature_monster_dist = min_monster_distance
+        feature_monster_dist = self.get_min_monster_dist(self.wrld)
 
         bomb_distances = []
         # feature for distance to closest bomb within 2 timesteps of explosion
@@ -332,12 +315,10 @@ class TestCharacter(CharacterEntity):
         # feature_walls_destroyed = self.walls_destroyed
 
         feature_danger_mask = int(self.danger_mask[(self.y),(self.x)])
-        feature_monster_dist = min_monster_distance
         exit_location = self.wrld.exitcell
         exit_dist = self.manhattan_distance([exit_location[0],exit_location[1]], [self.x,self.y])
         feature_exit_dist = exit_dist
-        features = monster_current_distances
-        features = [feature_exit_dist, feature_min_bomb_dist, feature_min_expl_dist, feature_monster_dist, feature_danger_mask]
+        features = [feature_exit_dist, feature_min_bomb_dist, feature_monster_dist]
         # print("feature_exit_dist: " + str(feature_exit_dist))
         # print("feature_min_bomb_dist: " + str(feature_min_bomb_dist))
         # print("feature_min_expl_dist: " + str(feature_min_expl_dist))
@@ -430,7 +411,7 @@ class TestCharacter(CharacterEntity):
 
     def update_weights(self, name):
         # calculate reward gained from the move
-        reward = self.wrld.scores["me"] - self.score
+        reward = self.score - self.wrld.scores["me"]
         self.score = self.wrld.scores["me"]
 
         # sample Q-values from the list of possible moves
@@ -438,11 +419,7 @@ class TestCharacter(CharacterEntity):
         features = self.get_state_features(self.wrld)
         Q = 0.0
         for idx, weight in enumerate(self.weights):
-            if idx == 4:
-                # feature_danger_mask boolean feature
-                Q += weight*features[idx]
-            else:
-                Q += weight*(1/(features[idx]+1))
+            Q += weight*(1/(features[idx]+1))
 
         # Update weights
         current_world = SensedWorld.from_world(self.wrld)
@@ -451,6 +428,7 @@ class TestCharacter(CharacterEntity):
         delta = (reward + self.gamma*next_reward) - Q
         print("reward: " + str(reward))
         print("next_reward: " + str(next_reward))
+        print("delta: " +str(delta))
         for idx, weight in enumerate(self.weights):
             self.weights[idx] = weight+self.learning_rate*delta*features[idx]
         self.update_weight_category(name,self.weights) #updates the respective name in the json
@@ -500,3 +478,21 @@ class TestCharacter(CharacterEntity):
                     queue.append((nx, ny))
                     
         return distances
+
+    def get_min_monster_dist(self,current_world):
+
+        monster_current_distances = []
+        if current_world.monsters:
+            # compute list of monster distances for this step of the game
+            for m_current in current_world.monsters.values():
+                monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
+        min_monster_distance = 1000
+        for dist in monster_current_distances:
+            if not min_monster_distance:
+                # initialize first monster
+                min_monster_distance = dist
+            if dist < min_monster_distance:
+                min_monster_distance = dist
+        # if min_monster_distance > self.monster_avoid_distance:
+        #     min_monster_distance = 0
+        return min_monster_distance
