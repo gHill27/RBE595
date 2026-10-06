@@ -63,7 +63,7 @@ class TestCharacter(CharacterEntity):
             (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
         ]
         monster_distances = []
-
+        
         for monster in all_monsters:
             monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
         
@@ -154,7 +154,7 @@ class TestCharacter(CharacterEntity):
             Astar_path = self.Astar(pos, goal)
             self.path = Astar_path[1:]  # Skip the first position since it's the current position
         else:
-            print("self.should bomb: " + str(self.should_bomb(wrld,pos)))
+            # print("self.should bomb: " + str(self.should_bomb(wrld,pos)))
             if self.should_bomb(wrld,pos):
                 self.place_bomb()
             else:
@@ -163,7 +163,7 @@ class TestCharacter(CharacterEntity):
                 self.move(*move)
                 self.update_weights(name)
             self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
-            print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
+            # print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
 
     def get_move(self):
         print("self.state: " + str(self.state))
@@ -189,7 +189,7 @@ class TestCharacter(CharacterEntity):
             
             if Q > max(Qs,default=0) and Q > 0:
                 Qs.append(Q)
-                print("taking best Q move")
+                print(f"taking best Q move {move}")
                 best_move = move
             # else:
             #     # add first Q value if Qs is empty
@@ -274,8 +274,9 @@ class TestCharacter(CharacterEntity):
         total_path.reverse()
         return total_path
 
-    def manhattan_distance(self, a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+    def chebyshev_distance(self, point1, point2):
+        return max(abs(a - b) for a, b in zip(point1, point2))
+
 
     def get_state_features(self, wrld):
         current_world = SensedWorld.from_world(wrld)
@@ -288,7 +289,7 @@ class TestCharacter(CharacterEntity):
         for bomb in wrld.bombs.values():
             timer = getattr(bomb, 'timer', 2)
             if timer <= 5:
-                bomb_distances.append(self.manhattan_distance([bomb.x,bomb.y], [self.x,self.y]))
+                bomb_distances.append(self.chebyshev_distance([bomb.x,bomb.y], [self.x,self.y]))
 
         feature_min_bomb_dist = min(bomb_distances,default=0)
 
@@ -296,7 +297,7 @@ class TestCharacter(CharacterEntity):
         # feature for distance to explosion
         for expl in wrld.explosions.values():
             if 0 <= expl.x < self.wrld.width() and 0 <= expl.y < self.wrld.height():
-                expl_distances.append(self.manhattan_distance([expl.x,expl.y], [self.x,self.y]))
+                expl_distances.append(self.chebyshev_distance([expl.x,expl.y], [self.x,self.y]))
 
         feature_min_expl_dist = min(expl_distances,default=0)
 
@@ -316,7 +317,7 @@ class TestCharacter(CharacterEntity):
 
         feature_danger_mask = int(self.danger_mask[(self.y),(self.x)])
         exit_location = self.wrld.exitcell
-        exit_dist = self.manhattan_distance([exit_location[0],exit_location[1]], [self.x,self.y])
+        exit_dist = self.chebyshev_distance([exit_location[0],exit_location[1]], [self.x,self.y])
         feature_exit_dist = exit_dist
         features = [feature_exit_dist, feature_min_bomb_dist, feature_monster_dist]
         # print("feature_exit_dist: " + str(feature_exit_dist))
@@ -345,7 +346,7 @@ class TestCharacter(CharacterEntity):
         if wrld.monsters:
             # compute list of monster distances for this step of the game
             for m_current in wrld.monsters.values():
-                monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
+                monster_current_distances.append(self.chebyshev_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
             min_monster_distance = 0
             for dist in monster_current_distances:
                 if not min_monster_distance:
@@ -424,11 +425,11 @@ class TestCharacter(CharacterEntity):
         # Update weights
         current_world = SensedWorld.from_world(self.wrld)
         next_world, _ = current_world.next()
-        next_reward = next_world.scores["me"] - self.score
+        next_reward =  self.score - next_world.scores["me"]
         delta = (reward + self.gamma*next_reward) - Q
-        print("reward: " + str(reward))
-        print("next_reward: " + str(next_reward))
-        print("delta: " +str(delta))
+        print(f"reward: {reward}")
+        print(f"next_reward: {next_reward}")
+        print(f"delta: {delta}")
         for idx, weight in enumerate(self.weights):
             self.weights[idx] = weight+self.learning_rate*delta*features[idx]
         self.update_weight_category(name,self.weights) #updates the respective name in the json
@@ -485,7 +486,7 @@ class TestCharacter(CharacterEntity):
         if current_world.monsters:
             # compute list of monster distances for this step of the game
             for m_current in current_world.monsters.values():
-                monster_current_distances.append(self.manhattan_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
+                monster_current_distances.append(self.chebyshev_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
         min_monster_distance = 1000
         for dist in monster_current_distances:
             if not min_monster_distance:
