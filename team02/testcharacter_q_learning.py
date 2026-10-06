@@ -50,12 +50,13 @@ class TestCharacter(CharacterEntity):
         self.weights = None
     
     def _is_bomb_active(self, wrld):
-        return bool(wrld.bombs)
+        return len(wrld.bombs) > 0
 
     def define_state(self, wrld, distances_matrix):
         old_state = self.state
         if self._is_bomb_active(wrld):
             self.state = State.Bomb
+            print(f'old state {old_state} --> {self.state}')
             return
         
         bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
@@ -75,6 +76,8 @@ class TestCharacter(CharacterEntity):
                 self.state = State.Monster
             elif mdist > 0:
                 self.state = State.FarFromMonster
+                
+        print(f'old state {old_state} --> {self.state}')
 
     def compute_distances(self, start_cell):
         """
