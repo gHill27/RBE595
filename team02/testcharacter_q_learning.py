@@ -32,7 +32,7 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.2
+        self.LEARNING_RATE = 0.01
         self.EXPLORATION_PROB = 0.0
         self.MONSTER_AVOID_RADUIS = 4
         self.dist = None
@@ -228,13 +228,7 @@ class TestCharacter(CharacterEntity):
             return (0.0, 1.0, 0.0) if exited else (1.0, 0.0, 1.0)
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
-
-        #feature 2 solving
-        max_d = max(1, self.dist.max())
-        d = self.dist[wrld.me(self).y][wrld.me(self).x]
-        if d < 0:                     
-            d = max_d
-        f2 = -d / max_d               
+        f2 = 1/(1+self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell))              
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
         return (f1, f2, f3)
 
