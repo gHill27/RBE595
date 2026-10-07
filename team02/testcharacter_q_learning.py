@@ -14,6 +14,7 @@ from collections import deque
 import os 
 import random
 import math
+from events import Event
 
 class State(Enum):
     Free = 1
@@ -30,6 +31,10 @@ class TestCharacter(CharacterEntity):
         self.time = 0  # Initialize time variable
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
+        self.GAMMA = 0.9
+        self.LEARNING_RATE = 0.2
+        self.EXPLORATION_PROB = 0.0
+        self.MONSTER_AVOID_RADUIS = 4
 
         # load weights from q_learning_weights.json
         with open("q_learning_weights.json") as f:
@@ -38,12 +43,7 @@ class TestCharacter(CharacterEntity):
             self.monster_weights = q_weights["Monster"]
             self.far_weights = q_weights["Far"]
 
-        self.learning_rate = 0.01 # for Q-learning update step
-        self.gamma = 0.9 # future rewards discount factor
-        # probability for trying unexplored moves
-        self.exploration_prob = 0.0
-        # when to start considering monsters
-        self.monster_avoid_distance = 5
+        
         # feature for walls destroyed
         self.walls_destroyed = 0
         # current weight set
@@ -70,51 +70,14 @@ class TestCharacter(CharacterEntity):
         
         mdist = self.get_min_monster_dist(self.wrld)
         if mdist:
-            if bomberman_dist_to_exit - mdist < 0: 
+            if bomberman_dist_to_exit - mdist < 0 and bomberman_dist_to_exit > 0: 
                 self.state = State.Free
-            elif abs(mdist - bomberman_dist_to_exit) <= 4: #close to monster!
+            elif abs(mdist - bomberman_dist_to_exit) <= self.MONSTER_AVOID_RADUIS: #close to monster!
                 self.state = State.Monster
             elif mdist > 0:
                 self.state = State.FarFromMonster
 
         print(f'old state {old_state} --> {self.state}')
-
-    def compute_distances(self, start_cell):
-        """
-        Computes shortest path distances from a start cell using existing class helpers.
-        :param start_cell: Tuple of (x, y)
-        :return: 2D NumPy array of distances (shape: height x width)
-        """
-        width = self.wrld.width()
-        height = self.wrld.height()
-        
-        # Initialize distance array with -1 (unreachable/walls)
-        # Shape is (height, width) so we index as [y, x]
-        distances = np.full((height, width), -1, dtype=int)
-        
-        # Validate start position using your existing helper
-        if not self.is_valid_move(start_cell):
-            return distances  # Start is out of bounds or a wall
-
-        sx, sy = start_cell
-        queue = deque([start_cell])
-        distances[sy, sx] = 0  # y = row, x = col
-        
-        while queue:
-            curr_pos = queue.popleft()
-            cx, cy = curr_pos
-            curr_dist = distances[cy, cx]
-            
-            # Leverage your optimized get_neighbors method
-            for nx, ny in self.get_neighbors(curr_pos):
-                # Check if unvisited in our distance map
-                if distances[ny, nx] == -1:
-                    distances[ny, nx] = curr_dist + 1
-                    queue.append((nx, ny))
-                    
-        return distances
-    
-
 
     def do(self, wrld):
         # Your code here
@@ -123,8 +86,6 @@ class TestCharacter(CharacterEntity):
         self.define_state(wrld,distances_matrix)
         pos = (self.x, self.y)
         goal = wrld.exitcell
-        self.score = wrld.scores["me"]
-        self.danger_mask = self._compute_danger_mask(wrld, self.wrld.width(), self.wrld.height())
        
         name: str = None
         weight: dict = None
@@ -133,9 +94,14 @@ class TestCharacter(CharacterEntity):
             case State.Free:
                 self.path = self.Astar(pos,goal)[1:]
                 if self.path:
-                    self.move(*self.get_move())  # skip analysis and just move
+                    best_move = self.path.pop(0)
+                    # no need to look at Q-values if we have a free path to the exit
+                    next_step = best_move
+                    dx = next_step[0] - self.x
+                    dy = next_step[1] - self.y
+                    self.move(dx,dy)  # skip analysis and just move
                 else:
-                    print("ERROR NO PATH!!!")
+                    self.state = State.FarFromMonster #TODO actually make this smarter maybe
                 return
 
             case State.Bomb:
@@ -156,44 +122,106 @@ class TestCharacter(CharacterEntity):
         #restructure do: 
         #should check states DONE
         #should then get the weights for that state DONE
-        #should then go argmax of Q(s,a) = w1f1(s,a) + w2f2(s,a) + ...
-        #should then go delta <- real reward + gamma * argmax Q(s',a') - Q(s,a)
-        #should then update weight <- weight + learning factor * f1(s,a)
+        #should then go argmax of Q(s,a) = w1f1(s,a) + w2f2(s,a) + ... DONE
+        #should then go delta <- real reward + gamma * argmax Q(s',a') - Q(s,a) DONE
+        #should then update weight <- weight + learning factor * f1(s,a) DONE
         
+        Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld)
+        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name]
+        terminal = False
+        for e in sim_s_prime.events:
+            if e.tpe in [Event.CHARACTER_FOUND_EXIT, Event.CHARACTER_KILLED_BY_MONSTER, Event.BOMB_HIT_CHARACTER]:
+                if e.character.name == self.name:
+                    terminal = True
+                    break
         
-        
-        
-        
-        if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
-            Astar_path = self.Astar(pos, goal)
-            self.path = Astar_path[1:]  # Skip the first position since it's the current position
+        if terminal:
+            delta = reward - Q_s_a
+
         else:
-            if self.should_bomb(wrld,pos):
-                self.place_bomb()
-            else:
-                self.move(*self.get_move())
-                self.update_weights(name)
-            self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
+            delta = reward + self.argmaxQ(sim_s_prime)[0]*self.GAMMA - Q_s_a
 
+        features_s_a = self.computefeatures(sim_s_prime) 
+        
+        for index, weight in enumerate(self.weights):
+            self.weights[index] = weight + self.LEARNING_RATE * delta * features_s_a[index]
+
+        self.update_weight_category(name, self.weights)
+        if self.should_bomb(wrld,pos):
+            self.place_bomb()
+
+        self.move(*best_move)
+
+
+
+    def get_blocked_move(self,pos,goal):
+        distance_to_goal = math.dist(pos,goal)
+        best = pos
+        best_dist = distance_to_goal
+        for neighbor in self.get_neighbors(pos):
+            if math.dist(neighbor,goal) < best_dist:
+                best = neighbor
+                best_dist = math.dist(neighbor,goal)
+        
+        return best
+   
+    # def get_move(self,wrld):
+    #     Qval, move = self.argmaxQ(wrld)
+    #     return move
+
+
+    # def update_weights(self, name, wrld):
+    #     qvals = self.computefeatures(wrld)
+    #     delta = self.calcDelta(wrld)
+    #     for index, weight in enumerate(self.weights):
+    #         self.weights[index] = weight + self.LEARNING_RATE*delta*qvals[index]
+    #     self.update_weight_category(name,self.weights) #updates the respective name in the json
+        
+
+    # def calcDelta(self,wrld):
+    #     Qprimemax, Qprimemove, bestwrld = self.argmaxQ(wrld)
+    #     Qcurr = self.computeQfunction(wrld)
+    #     reward = wrld.scores["me"] - self.score
+    #     delta = reward + self.GAMMA*Qprimemax - Qcurr
+    #     return delta
+    
     def argmaxQ(self,wrld):
-        pos = wrld.me(self)
-        moves = self.get_valid_moves(pos)
+        pos = (wrld.me(self).x,wrld.me(self).y)
+        moves = self.get_valid_moves(wrld) #returns dx dy
+        bestQ = -math.inf
+        bestmove = (0,0)
+        bestwrld = wrld
         for move in moves:
-            self.computeQfunction(move,wrld)
+            img_wrld = SensedWorld.from_world(wrld)   
+            self.move_entities(move,img_wrld)
+            currQ = self.computeQfunction(img_wrld)
+            if currQ > bestQ:
+                bestQ = currQ
+                bestmove = move
+                bestwrld = img_wrld
 
+        return (bestQ, bestmove, bestwrld)
 
-    def computeQfunction(self,move,wrld):
-        img_wrld = SensedWorld.from_world(wrld)
-        img_wrld.me("me").move(move)
-        img_wrld.next()
+    def computeQfunction(self,wrld):
+        features = self.computefeatures(wrld)
+        p1 = self.weights[0] * features[0]
+        p2 = self.weights[1] * features[1]
+        p3 = self.weights[2] * features[2]
+        return p1 + p2 + p3
+
+    def computefeatures(self,wrld):
         #get weights here and compute
-        p1 = self.weights[0]*1/(1+self.get_min_monster_dist(img_wrld))
-        p2 = self.weights[1]*1/(1+self.chebyshev_distance(img_wrld.me("me"),img_wrld.exitcell))
-        p3 = self.weights[2]*1/(1) # + distance to bomb or explosion)
+        if wrld.me(self) is None:
+            return (0,0,0)
+        
+        f1 = 1/(1+self.get_min_monster_dist(wrld))
+        f2 = 1/(1+self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell))
+        f3 = 1/(1+self.get_min_explosion_dist(wrld))
+        return (f1, f2, f3)
 
-    def get_valid_moves(self,pos):
-        x = pos[0]
-        y = pos[1]
+    def get_valid_moves(self,wrld):
+        x = wrld.me(self).x
+        y = wrld.me(self).y
         valid_moves = []
         directions = [(1,0),(-1,0),(0,1),(0,-1),(0,0),(1,1),(-1,-1),(1,-1),(-1,1)]
         # Inline checks to avoid extra function call overhead
@@ -201,52 +229,28 @@ class TestCharacter(CharacterEntity):
             nx = direction[0] + x
             ny = direction[1] + y
             if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
-                valid_moves.append((nx, ny))
+                valid_moves.append((direction[0], direction[1]))
         return valid_moves
 
-        
+    def move_entities(self,move,img_wrld):
+        img_wrld.me(self).move(*move)
+        # assume worst case that monster is moving toward us 100% of the time
+        for index, monster_list in img_wrld.monsters.items():
+            for monster in monster_list:
+                xdist = img_wrld.me(self).x - monster.x 
+                ydist = img_wrld.me(self).y - monster.y
+                #dx calculation
+                if xdist < 0: dx = -1
+                elif xdist > 0: dx = 1
+                else: dx = 0
+                #dy calculation
+                if ydist < 0: dy = -1
+                elif ydist > 0: dy = 1
+                else: dy = 0
+                
+                monster.move(dx,dy)
+        img_wrld.next()
 
-
-
-    def get_move(self):
-        print("self.state: " + str(self.state))
-        if self.path:
-            best_move = self.path.pop(0)
-            if self.state == State.Free:
-                # no need to look at Q-values if we have a free path to the exit
-                next_step = best_move
-                dx = next_step[0] - self.x
-                dy = next_step[1] - self.y
-                return dx, dy
-        else:
-            best_move = self.get_blocked_move((self.x, self.y),self.wrld.exitcell)
-        Qs = []
-        neighbors = self.get_neighbors((self.x, self.y))
-        unexplored = []
-        for move in neighbors:
-            # compute Q-value
-            features = self.get_state_features(self.wrld)
-            Q = 0.0
-            for idx, weight in enumerate(self.weights):
-                Q += weight*(1/(features[idx]+1))
-            
-            if Q > max(Qs,default=0) and Q > 0:
-                Qs.append(Q)
-                print(f"taking best Q move {move}")
-                best_move = move
-            # else:
-            #     # add first Q value if Qs is empty
-            #     Qs.append(Q)
-            #     best_move = move
-        # explore areas with no known Q-value with some probability exploration_prob
-        if random.random() < self.exploration_prob:
-            best_move = (self.x, self.y)
-        if not best_move:
-            best_move = (self.x, self.y)
-        next_step = best_move
-        dx = next_step[0] - self.x
-        dy = next_step[1] - self.y
-        return dx, dy
 
     def Astar(self, pos, goal):
         start_time = time.perf_counter()
@@ -303,12 +307,6 @@ class TestCharacter(CharacterEntity):
                 neighbors.append((nx, ny))
         return neighbors
     
-    def is_valid_move(self, pos):
-        # Check if the position is within bounds and not a wall
-        x, y = pos
-        # Assuming wrld is accessible and has methods to check bounds and walls
-        return (0 <= x < self.wrld.width()) and (0 <= y < self.wrld.height()) and not self.wrld.wall_at(pos[0], pos[1])
-
     def reconstruct_path(self, came_from, current):
         total_path = [current]
         while current in came_from:
@@ -320,90 +318,30 @@ class TestCharacter(CharacterEntity):
     def chebyshev_distance(self, point1, point2):
         return max(abs(a - b) for a, b in zip(point1, point2))
 
-
-    def get_state_features(self, wrld):
-        current_world = SensedWorld.from_world(wrld)
-        next_world, events = current_world.next()
-
-        feature_monster_dist = self.get_min_monster_dist(self.wrld)
-
-        bomb_distances = []
-        # feature for distance to closest bomb within 2 timesteps of explosion
-        for bomb in wrld.bombs.values():
-            timer = getattr(bomb, 'timer', 2)
-            if timer <= 5:
-                bomb_distances.append(self.chebyshev_distance([bomb.x,bomb.y], [self.x,self.y]))
-
-        feature_min_bomb_dist = min(bomb_distances,default=0)
-
-        expl_distances = []
-        # feature for distance to explosion
-        for expl in wrld.explosions.values():
-            if 0 <= expl.x < self.wrld.width() and 0 <= expl.y < self.wrld.height():
-                expl_distances.append(self.chebyshev_distance([expl.x,expl.y], [self.x,self.y]))
-
-        feature_min_expl_dist = min(expl_distances,default=0)
-
-        adj_walls = []
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                if dx == 0 and dy == 0:
-                    continue
-                nx, ny = self.x + dx, self.y + dy
-                if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and wrld.wall_at(nx, ny):
-                    adj_walls.append((nx, ny))
-        # not using this feature anymore\
-        # feature_adjacent_walls = len(adj_walls)
-
-        # not using this feature anymore\
-        # feature_walls_destroyed = self.walls_destroyed
-
-        feature_danger_mask = int(self.danger_mask[(self.y),(self.x)])
-        exit_location = self.wrld.exitcell
-        exit_dist = self.chebyshev_distance([exit_location[0],exit_location[1]], [self.x,self.y])
-        feature_exit_dist = exit_dist
-        features = [feature_exit_dist, feature_min_bomb_dist, feature_monster_dist]
-        # print("feature_exit_dist: " + str(feature_exit_dist))
-        # print("feature_min_bomb_dist: " + str(feature_min_bomb_dist))
-        # print("feature_min_expl_dist: " + str(feature_min_expl_dist))
-        # print("feature_monster_dist: " + str(feature_monster_dist))
-        # print("feature_danger_mask: " + str(feature_danger_mask))
-
-        # return a list of the features
-        return features
-
     #BOMBING CODE:
-    def should_bomb(self,wrld,pos) -> bool:
-        """ Places a bomb if there is no path to the exit, a bomb would clear a new path to the exit that avoids the monster, or a monster is blocking the path"""
-        retval = False
-        if not self.path:
-            retval = True #should place bomb no path to the exit  
-        monsters = []
-        for m in wrld.monsters.values():
-            monsters.append(m[0].x)
-            monsters.append(m[0].y)
+    def should_bomb(self, wrld, pos) -> bool:
+        # Never stack bombs
+        if wrld.bombs:
+            return False
 
-        if self.get_blocked_move(pos,wrld.exitcell) == (0,0) : #CHANGE TO BOMB A NEARBY WALL IF ITS IN THE WAY
-            retval = True
-        monster_current_distances = []
-        if wrld.monsters:
-            # compute list of monster distances for this step of the game
-            for m_current in wrld.monsters.values():
-                monster_current_distances.append(self.chebyshev_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
-            min_monster_distance = 0
-            for dist in monster_current_distances:
-                if not min_monster_distance:
-                    # initialize first monster
-                    min_monster_distance = dist
-                if dist < min_monster_distance:
-                    min_monster_distance = dist
-            if min_monster_distance < self.monster_avoid_distance:
-                retval = True
+        x, y = pos
 
-        if retval:
-            print('placing bomb!')
-        
-        return retval
+        # Reason 1: no path to the exit, and a wall is right next to me
+        if not self.Astar(pos, wrld.exitcell):
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    nx, ny = x + dx, y + dy
+                    if (dx, dy) != (0, 0) and 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                        if wrld.wall_at(nx, ny):
+                            return True
+
+        # Reason 2: a monster is very close
+        for mlist in wrld.monsters.values():
+            for m in mlist:
+                if max(abs(m.x - x), abs(m.y - y)) <= 2:
+                    return True
+
+        return False
 
     def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
         # 1. Load existing file if it exists, otherwise start with a fresh structure
@@ -427,82 +365,80 @@ class TestCharacter(CharacterEntity):
         with open(filename, "w") as f:
             json.dump(data, f, indent=2)
 
-    def _compute_danger_mask(self, wrld, width, height):
-            danger = np.zeros((height, width), dtype=bool)
-
-            for expl in wrld.explosions.values():
-                if 0 <= expl.x < width and 0 <= expl.y < height:
-                    danger[expl.y, expl.x] = True
-
-            for bomb in wrld.bombs.values():
-                timer = getattr(bomb, 'timer', 2)
-                if timer <= 2:
-                    self._mask_blast(wrld, bomb.x, bomb.y, width, height, danger)
-
-            return danger
-
-    def _mask_blast(self, wrld, bx, by, width, height, danger):
-        danger[by, bx] = True
-        expl_range = getattr(wrld, 'expl_range', 4)
-        for dx, dy in ((-1,0), (1,0), (0,-1), (0,1)):
-            for r in range(1, expl_range + 1):
-                nx, ny = bx + dx * r, by + dy * r
-                if not (0 <= nx < width and 0 <= ny < height):
-                    break
-                danger[ny, nx] = True
-                if wrld.wall_at(nx, ny):
-                    break
-
-    def update_weights(self, name, wrld):
-        # calculate reward gained from the move
+    def get_min_monster_dist(self,wrld, default=100):
+        """Chebyshev distance from me to the nearest monster in `wrld`.
+        Measures from the position in `wrld`, so it works on simulated worlds."""
+        me = wrld.me(self)
+        if me is None:                  # character is dead/gone in this world
+            return 0
+        dists = [
+            self.chebyshev_distance((m.x, m.y), (me.x, me.y))
+            for mlist in wrld.monsters.values()
+            for m in mlist
+        ]
+        return min(dists, default=default)
+    
+    # def get_min_bomb_dist(self,wrld):
+    #     bomb_dists = []
+    #     for bomb in wrld.bombs.values():
+    #         timer = getattr(bomb, 'timer', 2)
+    #         if timer <= 5:
+    #             bomb_dists.append(self.chebyshev_distance([bomb.x,bomb.y], [wrld.me(self).x, wrld.me(self).y]))
         
-        reward = self.score - self.wrld.scores["me"]
-        self.score = self.wrld.scores["me"]
+    #     return min(bomb_dists,default=0)
 
-        # sample Q-values from the list of possible moves
-        # and choose the action with the highest value
-        features = self.get_state_features(self.wrld)
-        Q = 0.0
-        for idx, weight in enumerate(self.weights):
-            Q += weight*(1/(features[idx]+1))
+    def get_min_explosion_dist(self, wrld, default=100):
+        """Chebyshev distance from me to the nearest explosion cell in `wrld`.
+        Returns 0 only if I'm standing in an explosion (or dead);
+        returns `default` (far away) when there is no explosion at all."""
+        me = wrld.me(self)
+        if me is None:                  # dead in this simulated world
+            return 0
 
-        # Update weights
-        current_world = SensedWorld.from_world(self.wrld)
-        next_world, _ = current_world.next()
-        next_reward =  self.score - next_world.scores["me"]
-        delta = (reward + self.gamma*next_reward) - Q
-        print(f"reward: {reward}")
-        print(f"next_reward: {next_reward}")
-        print(f"delta: {delta}")
-        for idx, weight in enumerate(self.weights):
-            self.weights[idx] = weight+self.learning_rate*delta*features[idx]
-        self.update_weight_category(name,self.weights) #updates the respective name in the json
+        dists = [
+            self.chebyshev_distance((e.x, e.y), (me.x, me.y))
+            for e in wrld.explosions.values()
+            if 0 <= e.x < wrld.width() and 0 <= e.y < wrld.height()
+        ]
+        return min(dists, default=default)
 
-    def get_blocked_move(self,pos,goal):
-        distance_to_goal = math.dist(pos,goal)
-        best = pos
-        best_dist = distance_to_goal
-        for neighbor in self.get_neighbors(pos):
-            if math.dist(neighbor,goal) < best_dist:
-                best = neighbor
-                best_dist = math.dist(neighbor,goal)
+    def compute_distances(self, start_cell):
+        """
+        Computes shortest path distances from a start cell using existing class helpers.
+        :param start_cell: Tuple of (x, y)
+        :return: 2D NumPy array of distances (shape: height x width)
+        """
+        width = self.wrld.width()
+        height = self.wrld.height()
         
-        return best
+        # Initialize distance array with -1 (unreachable/walls)
+        # Shape is (height, width) so we index as [y, x]
+        distances = np.full((height, width), -1, dtype=int)
+        
+        # Validate start position using your existing helper
+        if not self.is_valid_move(start_cell):
+            return distances  # Start is out of bounds or a wall
 
-    def get_min_monster_dist(self,current_world):
+        sx, sy = start_cell
+        queue = deque([start_cell])
+        distances[sy, sx] = 0  # y = row, x = col
+        
+        while queue:
+            curr_pos = queue.popleft()
+            cx, cy = curr_pos
+            curr_dist = distances[cy, cx]
+            
+            # Leverage your optimized get_neighbors method
+            for nx, ny in self.get_neighbors(curr_pos):
+                # Check if unvisited in our distance map
+                if distances[ny, nx] == -1:
+                    distances[ny, nx] = curr_dist + 1
+                    queue.append((nx, ny))
+                    
+        return distances
 
-        monster_current_distances = []
-        if current_world.monsters:
-            # compute list of monster distances for this step of the game
-            for m_current in current_world.monsters.values():
-                monster_current_distances.append(self.chebyshev_distance([m_current[0].x,m_current[0].y], [self.x,self.y]))
-        min_monster_distance = 1000
-        for dist in monster_current_distances:
-            if not min_monster_distance:
-                # initialize first monster
-                min_monster_distance = dist
-            if dist < min_monster_distance:
-                min_monster_distance = dist
-        # if min_monster_distance > self.monster_avoid_distance:
-        #     min_monster_distance = 0
-        return min_monster_distance
+    def is_valid_move(self, pos):
+        # Check if the position is within bounds and not a wall
+        x, y = pos
+        # Assuming wrld is accessible and has methods to check bounds and walls
+        return (0 <= x < self.wrld.width()) and (0 <= y < self.wrld.height()) and not self.wrld.wall_at(pos[0], pos[1])
