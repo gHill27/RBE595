@@ -3,12 +3,13 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 monster_game = "test_monster.py"
-total_runs = 100
+# monster_game = "test_bomb.py"
+total_runs = 10
 # Run up to 10 games at the exact same time to speed things up
 max_concurrent_workers = 1 
 
 def run_game(script_name):
-    exploration_prob = " 0.5"
+    exploration_prob = " 0.05"
 
     try:
         result = subprocess.run([sys.executable, script_name, exploration_prob], capture_output=True, text=True, timeout=10)

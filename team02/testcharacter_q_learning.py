@@ -34,7 +34,7 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.2
+        self.LEARNING_RATE = 0.01
         if len(sys.argv) > 1:
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
@@ -60,18 +60,16 @@ class TestCharacter(CharacterEntity):
 
     def define_state(self, wrld, distances_matrix):
         old_state = self.state
-        if self._is_bomb_active(wrld):
-            self.state = State.Bomb
-            print(f'old state {old_state} --> {self.state}')
-            return
         
         bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
         all_monsters = [
             (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
         ]
         if not all_monsters:
-            self.state = State.Free if my_d > 0 else State.FarFromMonster
-            print(f'old state {old} --> {self.state}')
+            if self._is_bomb_active(wrld):
+                self.state = State.Bomb 
+            self.state = State.Free if bomberman_dist_to_exit > 0 else State.FarFromMonster
+            print(f'old state {old_state} --> {self.state}')
             return
         
         monster_distances = []
@@ -83,10 +81,13 @@ class TestCharacter(CharacterEntity):
 
         if winning_race:
             self.state = State.Free
+        elif self._is_bomb_active(wrld):
+            self.state = State.Bomb            
         elif mdist <= self.MONSTER_AVOID_RADUIS: #close to monster!
             self.state = State.Monster
         else:
             self.state = State.FarFromMonster
+        
 
         print(f'old state {old_state} --> {self.state}')
 
@@ -112,9 +113,12 @@ class TestCharacter(CharacterEntity):
                     dx = next_step[0] - self.x
                     dy = next_step[1] - self.y
                     self.move(dx,dy)  # skip analysis and just move
+                    return
                 else:
                     self.state = State.FarFromMonster #TODO actually make this smarter maybe
-                return
+                    weight = self.far_weights
+                    name = "Far"
+                    self.weights = self.far_weights
 
             case State.Bomb:
                 weight = self.bomb_weights 
@@ -139,6 +143,7 @@ class TestCharacter(CharacterEntity):
         #should then update weight <- weight + learning factor * f1(s,a) DONE
         
         Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld)
+        print(f'Q(s,a) = {Q_s_a} \n best move is {best_move}')
         terminal = sim_s_prime.me(self) is None
         exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
              for e in sim_s_prime.events)
@@ -151,15 +156,18 @@ class TestCharacter(CharacterEntity):
         if died:
             reward -= 1000
         reward = reward/100.0 # scaling so it doesnt get massive weights 
+        print(f'reward is {reward}')
         if terminal:
             delta = reward - Q_s_a
 
         else:
-            delta = reward + self.argmaxQ(sim_s_prime)[0]*self.GAMMA - Q_s_a
+            q_sp_ap = self.argmaxQ(sim_s_prime)[0]
+            print(f"Q(s',a') is {q_sp_ap}")
+            delta = reward + q_sp_ap*self.GAMMA - Q_s_a
+        print(f'delta is {delta}')
 
         features_s_a = self.computefeatures(sim_s_prime) 
         
-        print(f'reward is {reward}')
         for index, weight in enumerate(self.weights):
             self.weights[index] = weight + self.LEARNING_RATE * delta * features_s_a[index]
 
@@ -220,14 +228,16 @@ class TestCharacter(CharacterEntity):
         p1 = self.weights[0] * features[0]
         p2 = self.weights[1] * features[1]
         p3 = self.weights[2] * features[2]
-        return p1 + p2 + p3
+        p4 = self.weights[3] * features[3]
+        p5 = self.weights[4] * features[4]
+        return p1 + p2 + p3 + p4 + p5
 
     def computefeatures(self,wrld):
         #get weights here and compute
         if wrld.me(self) is None:
             exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
                      for e in wrld.events)
-            return (0.0, 1.0, 0.0) if exited else (1.0, 0.0, 1.0)
+            return (0.0, 1.0, 0.0, 0.0, 1.0) if exited else (1.0, 0.0, 1.0, 0.0, 1.0)
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
         #f2
@@ -235,24 +245,47 @@ class TestCharacter(CharacterEntity):
         d = self.dist[wrld.me(self).y][wrld.me(self).x]
         if d <= 0:
             d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
-            f2 = -1/(1+d)
+            # print(f'no ideal path using chebyshevs distance {d}')
+            f2 = -d/max(wrld.width(),wrld.height())
         else:
             f2 = -d/maxd              
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
-        return (f1, f2, f3)
+        #add 2 more weights one for distance to bomb.
+        f4 = 1/(1+self.get_min_bomb_dist(wrld))
+        #added number of neighbors weight to incentivise moves in the open.
+        num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
+        f5 = 1/(10 - num_of_neighbors)
+        print(
+            f"f1 = {f1} \n f2 = {f2} \n f3 = {f3} \n f4 = {f4} \n f5 = {f5}"
+        )
+        return [f1, f2, f3, f4, f5]
 
     def get_valid_moves(self,wrld):
         x = wrld.me(self).x
         y = wrld.me(self).y
+
+        blocked = {(b.x, b.y) for b in wrld.bombs.values()}
+        blocked |= {(e.x, e.y) for e in wrld.explosions.values()}
+        blocked |= {(m.x, m.y) for ml in wrld.monsters.values() for m in ml}
+
         valid_moves = []
         directions = [(1,0),(-1,0),(0,1),(0,-1),(0,0),(1,1),(-1,-1),(1,-1),(-1,1)]
         # Inline checks to avoid extra function call overhead
         for direction in directions:
             nx = direction[0] + x
             ny = direction[1] + y
-            if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny):
+            if not (0 <= nx < wrld.width() and 0 <= ny < wrld.height()):
+                continue
+            if (nx,ny) in blocked:
+                continue 
+            if wrld.wall_at(nx, ny):
+                continue
+            else:
                 valid_moves.append((direction[0], direction[1]))
-        return valid_moves
+        if valid_moves:
+            return valid_moves
+        else:
+            return [(0,0)]
 
     def move_entities(self,move,img_wrld):
         img_wrld.me(self).move(*move)
@@ -388,7 +421,7 @@ class TestCharacter(CharacterEntity):
         with open(filename, "w") as f:
             json.dump(data, f, indent=2)
 
-    def get_min_monster_dist(self,wrld, default=100):
+    def get_min_monster_dist(self,wrld, default=1000):
         """Chebyshev distance from me to the nearest monster in `wrld`.
         Measures from the position in `wrld`, so it works on simulated worlds."""
         me = wrld.me(self)
@@ -401,16 +434,17 @@ class TestCharacter(CharacterEntity):
         ]
         return min(dists, default=default)
     
-    # def get_min_bomb_dist(self,wrld):
-    #     bomb_dists = []
-    #     for bomb in wrld.bombs.values():
-    #         timer = getattr(bomb, 'timer', 2)
-    #         if timer <= 5:
-    #             bomb_dists.append(self.chebyshev_distance([bomb.x,bomb.y], [wrld.me(self).x, wrld.me(self).y]))
-        
-    #     return min(bomb_dists,default=0)
+    def get_min_bomb_dist(self, wrld, default=1000):
+        me = wrld.me(self)
+        if me is None:
+            return default
+        mx, my = me.x, me.y
+        dists = []
+        for b in list(wrld.bombs.values()):
+            dists.append(max(abs(b.x - mx), abs(b.y - my)))
+        return min(dists, default=default)
 
-    def get_min_explosion_dist(self, wrld, default=100):
+    def get_min_explosion_dist(self, wrld, default=1000):
         """Chebyshev distance from me to the nearest explosion cell in `wrld`.
         Returns 0 only if I'm standing in an explosion (or dead);
         returns `default` (far away) when there is no explosion at all."""
