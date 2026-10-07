@@ -140,7 +140,7 @@ class TestCharacter(CharacterEntity):
 
         if died:
             reward -= 1000
-        reward = reward/100 # scaling so it doesnt get massive weights 
+        reward = reward/100.0 # scaling so it doesnt get massive weights 
         if terminal:
             delta = reward - Q_s_a
 
