@@ -174,26 +174,6 @@ class TestCharacter(CharacterEntity):
                 best_dist = math.dist(neighbor,goal)
         
         return best
-   
-    # def get_move(self,wrld):
-    #     Qval, move = self.argmaxQ(wrld)
-    #     return move
-
-
-    # def update_weights(self, name, wrld):
-    #     qvals = self.computefeatures(wrld)
-    #     delta = self.calcDelta(wrld)
-    #     for index, weight in enumerate(self.weights):
-    #         self.weights[index] = weight + self.LEARNING_RATE*delta*qvals[index]
-    #     self.update_weight_category(name,self.weights) #updates the respective name in the json
-        
-
-    # def calcDelta(self,wrld):
-    #     Qprimemax, Qprimemove, bestwrld = self.argmaxQ(wrld)
-    #     Qcurr = self.computeQfunction(wrld)
-    #     reward = wrld.scores["me"] - self.score
-    #     delta = reward + self.GAMMA*Qprimemax - Qcurr
-    #     return delta
     
     def argmaxQ(self,wrld):
         pos = (wrld.me(self).x,wrld.me(self).y)
@@ -208,7 +188,8 @@ class TestCharacter(CharacterEntity):
                 exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
                             for e in nxt.events)
                 currQ = 1e6 if exited else -1e6
-            currQ = self.computeQfunction(nxt)
+            else:
+                currQ = self.computeQfunction(nxt)
             if currQ > bestQ:
                 bestQ = currQ
                 bestmove = move
