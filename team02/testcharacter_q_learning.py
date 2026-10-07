@@ -76,7 +76,7 @@ class TestCharacter(CharacterEntity):
                 self.state = State.Monster
             elif mdist > 0:
                 self.state = State.FarFromMonster
-                
+
         print(f'old state {old_state} --> {self.state}')
 
     def compute_distances(self, start_cell):
@@ -153,20 +153,60 @@ class TestCharacter(CharacterEntity):
                 name = "Monster"
                 self.weights = self.monster_weights
 
+        #restructure do: 
+        #should check states DONE
+        #should then get the weights for that state DONE
+        #should then go argmax of Q(s,a) = w1f1(s,a) + w2f2(s,a) + ...
+        #should then go delta <- real reward + gamma * argmax Q(s',a') - Q(s,a)
+        #should then update weight <- weight + learning factor * f1(s,a)
+        
+        
+        
+        
+        
         if not self.path or self.path[-1] != goal:  # Recalculate path if it's empty or goal has changed
             Astar_path = self.Astar(pos, goal)
             self.path = Astar_path[1:]  # Skip the first position since it's the current position
         else:
-            # print("self.should bomb: " + str(self.should_bomb(wrld,pos)))
             if self.should_bomb(wrld,pos):
                 self.place_bomb()
             else:
-                move = self.get_move()  # Move according to the next step in the path
-                # if move == (0, 0) and self.should_bomb(wrld,pos):
-                self.move(*move)
+                self.move(*self.get_move())
                 self.update_weights(name)
             self.set_cell_color(pos[0], pos[1], Fore.GREEN)  # Set the color of the cell to green
-            # print(f"Current position: {pos}, Next position: {self.path[0] if self.path else 'None'}, Time taken for A*: {self.time:.6f} seconds")
+
+    def argmaxQ(self,wrld):
+        pos = wrld.me(self)
+        moves = self.get_valid_moves(pos)
+        for move in moves:
+            self.computeQfunction(move,wrld)
+
+
+    def computeQfunction(self,move,wrld):
+        img_wrld = SensedWorld.from_world(wrld)
+        img_wrld.me("me").move(move)
+        img_wrld.next()
+        #get weights here and compute
+        p1 = self.weights[0]*1/(1+self.get_min_monster_dist(img_wrld))
+        p2 = self.weights[1]*1/(1+self.chebyshev_distance(img_wrld.me("me"),img_wrld.exitcell))
+        p3 = self.weights[2]*1/(1) # + distance to bomb or explosion)
+
+    def get_valid_moves(self,pos):
+        x = pos[0]
+        y = pos[1]
+        valid_moves = []
+        directions = [(1,0),(-1,0),(0,1),(0,-1),(0,0),(1,1),(-1,-1),(1,-1),(-1,1)]
+        # Inline checks to avoid extra function call overhead
+        for direction in directions:
+            nx = direction[0] + x
+            ny = direction[1] + y
+            if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
+                valid_moves.append((nx, ny))
+        return valid_moves
+
+        
+
+
 
     def get_move(self):
         print("self.state: " + str(self.state))
@@ -258,7 +298,7 @@ class TestCharacter(CharacterEntity):
         neighbors = []
         # Inline checks to avoid extra function call overhead
         for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1), (x, y),
-                       (x + 1, y + 1), (x - 1, y - 1)):
+                       (x + 1, y + 1), (x - 1, y - 1),(x+1,y-1),(x-1,y+1)):
             if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
                 neighbors.append((nx, ny))
         return neighbors
@@ -413,8 +453,9 @@ class TestCharacter(CharacterEntity):
                 if wrld.wall_at(nx, ny):
                     break
 
-    def update_weights(self, name):
+    def update_weights(self, name, wrld):
         # calculate reward gained from the move
+        
         reward = self.score - self.wrld.scores["me"]
         self.score = self.wrld.scores["me"]
 
@@ -447,41 +488,6 @@ class TestCharacter(CharacterEntity):
                 best_dist = math.dist(neighbor,goal)
         
         return best
-
-    def compute_distances(self, start_cell):
-        """
-        Computes shortest path distances from a start cell using existing class helpers.
-        :param start_cell: Tuple of (x, y)
-        :return: 2D NumPy array of distances (shape: height x width)
-        """
-        width = self.wrld.width()
-        height = self.wrld.height()
-        
-        # Initialize distance array with -1 (unreachable/walls)
-        # Shape is (height, width) so we index as [y, x]
-        distances = np.full((height, width), -1, dtype=int)
-        
-        # Validate start position using your existing helper
-        if not self.is_valid_move(start_cell):
-            return distances  # Start is out of bounds or a wall
-
-        sx, sy = start_cell
-        queue = deque([start_cell])
-        distances[sy, sx] = 0  # y = row, x = col
-        
-        while queue:
-            curr_pos = queue.popleft()
-            cx, cy = curr_pos
-            curr_dist = distances[cy, cx]
-            
-            # Leverage your optimized get_neighbors method
-            for nx, ny in self.get_neighbors(curr_pos):
-                # Check if unvisited in our distance map
-                if distances[ny, nx] == -1:
-                    distances[ny, nx] = curr_dist + 1
-                    queue.append((nx, ny))
-                    
-        return distances
 
     def get_min_monster_dist(self,current_world):
 
