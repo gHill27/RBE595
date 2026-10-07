@@ -32,7 +32,7 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.01
+        self.LEARNING_RATE = 0.05
         self.EXPLORATION_PROB = 0.0
         self.MONSTER_AVOID_RADUIS = 2
         self.dist = None
@@ -229,10 +229,13 @@ class TestCharacter(CharacterEntity):
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
         #f2
+        maxd = np.max(self.dist)
         d = self.dist[wrld.me(self).y][wrld.me(self).x]
         if d <= 0:
             d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
-        f2 = 1/(1+d)              
+            f2 = -1/(1+d)
+        else:
+            f2 = -d/maxd              
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
         return (f1, f2, f3)
 
@@ -411,7 +414,7 @@ class TestCharacter(CharacterEntity):
         returns `default` (far away) when there is no explosion at all."""
         me = wrld.me(self)
         for event in wrld.events:
-            if event.tpe == self.BOMB_HIT_CHARACTER:
+            if event.tpe == event.BOMB_HIT_CHARACTER:
                 return 0
 
         dists = [
