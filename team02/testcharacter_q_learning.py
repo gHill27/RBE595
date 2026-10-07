@@ -35,6 +35,7 @@ class TestCharacter(CharacterEntity):
         self.LEARNING_RATE = 0.2
         self.EXPLORATION_PROB = 0.0
         self.MONSTER_AVOID_RADUIS = 4
+        self.dist = None
 
         # load weights from q_learning_weights.json
         with open("q_learning_weights.json") as f:
@@ -86,6 +87,8 @@ class TestCharacter(CharacterEntity):
         self.define_state(wrld,distances_matrix)
         pos = (self.x, self.y)
         goal = wrld.exitcell
+        distances_matrix = self.compute_distances(wrld.exitcell)
+        self.dist = distances_matrix
        
         name: str = None
         weight: dict = None
@@ -127,14 +130,17 @@ class TestCharacter(CharacterEntity):
         #should then update weight <- weight + learning factor * f1(s,a) DONE
         
         Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld)
-        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name]
-        terminal = False
-        for e in sim_s_prime.events:
-            if e.tpe in [Event.CHARACTER_FOUND_EXIT, Event.CHARACTER_KILLED_BY_MONSTER, Event.BOMB_HIT_CHARACTER]:
-                if e.character.name == self.name:
-                    terminal = True
-                    break
+        terminal = sim_s_prime.me(self) is None
+        exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
+             for e in sim_s_prime.events)
+        died = terminal and not exited
+
         
+        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name]
+
+        if died:
+            reward -= 1000
+        reward = reward/100 # scaling so it doesnt get massive weights 
         if terminal:
             delta = reward - Q_s_a
 
@@ -143,6 +149,7 @@ class TestCharacter(CharacterEntity):
 
         features_s_a = self.computefeatures(sim_s_prime) 
         
+        print(f'reward is {reward}')
         for index, weight in enumerate(self.weights):
             self.weights[index] = weight + self.LEARNING_RATE * delta * features_s_a[index]
 
@@ -193,12 +200,16 @@ class TestCharacter(CharacterEntity):
         bestwrld = wrld
         for move in moves:
             img_wrld = SensedWorld.from_world(wrld)   
-            self.move_entities(move,img_wrld)
-            currQ = self.computeQfunction(img_wrld)
+            nxt = self.move_entities(move,img_wrld)
+            if nxt.me(self) is None:
+                exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
+                            for e in nxt.events)
+                currQ = 1e6 if exited else -1e6
+            currQ = self.computeQfunction(nxt)
             if currQ > bestQ:
                 bestQ = currQ
                 bestmove = move
-                bestwrld = img_wrld
+                bestwrld = nxt
 
         return (bestQ, bestmove, bestwrld)
 
@@ -212,10 +223,18 @@ class TestCharacter(CharacterEntity):
     def computefeatures(self,wrld):
         #get weights here and compute
         if wrld.me(self) is None:
-            return (0,0,0)
+            exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
+                     for e in wrld.events)
+            return (0.0, 1.0, 0.0) if exited else (1.0, 0.0, 1.0)
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
-        f2 = 1/(1+self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell))
+
+        #feature 2 solving
+        max_d = max(1, self.dist.max())
+        d = self.dist[wrld.me(self).y][wrld.me(self).x]
+        if d < 0:                     
+            d = max_d
+        f2 = -d / max_d               
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
         return (f1, f2, f3)
 
@@ -228,7 +247,7 @@ class TestCharacter(CharacterEntity):
         for direction in directions:
             nx = direction[0] + x
             ny = direction[1] + y
-            if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
+            if 0 <= nx < wrld.width() and 0 <= ny < wrld.height() and not wrld.wall_at(nx, ny):
                 valid_moves.append((direction[0], direction[1]))
         return valid_moves
 
@@ -249,7 +268,8 @@ class TestCharacter(CharacterEntity):
                 else: dy = 0
                 
                 monster.move(dx,dy)
-        img_wrld.next()
+        new_wrld, events = img_wrld.next()
+        return new_wrld 
 
 
     def Astar(self, pos, goal):
