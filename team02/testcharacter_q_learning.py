@@ -67,7 +67,9 @@ class TestCharacter(CharacterEntity):
         ]
         if not all_monsters:
             if self._is_bomb_active(wrld):
-                self.state = State.Bomb 
+                self.state = State.Bomb
+                print(f'old state {old_state} --> {self.state}')
+                return 
             self.state = State.Free if bomberman_dist_to_exit > 0 else State.FarFromMonster
             print(f'old state {old_state} --> {self.state}')
             return
@@ -116,6 +118,7 @@ class TestCharacter(CharacterEntity):
                     return
                 else:
                     self.state = State.FarFromMonster #TODO actually make this smarter maybe
+                    print('debug to far state ')
                     weight = self.far_weights
                     name = "Far"
                     self.weights = self.far_weights
@@ -256,7 +259,7 @@ class TestCharacter(CharacterEntity):
         num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
         f5 = 1/(10 - num_of_neighbors)
         print(
-            f"f1 = {f1} \n f2 = {f2} \n f3 = {f3} \n f4 = {f4} \n f5 = {f5}"
+            f"f1 = {f1} \nf2 = {f2} \nf3 = {f3} \nf4 = {f4} \nf5 = {f5}"
         )
         return [f1, f2, f3, f4, f5]
 
@@ -283,6 +286,7 @@ class TestCharacter(CharacterEntity):
             else:
                 valid_moves.append((direction[0], direction[1]))
         if valid_moves:
+            print(f"valid moves are {valid_moves}")
             return valid_moves
         else:
             return [(0,0)]
@@ -454,7 +458,7 @@ class TestCharacter(CharacterEntity):
                 return 0
 
         dists = [
-            self.chebyshev_distance((e.x, e.y), (me.x, me.y))
+            self.manhattan_distance((e.x, e.y), (me.x, me.y))
             for e in wrld.explosions.values()
             if 0 <= e.x < wrld.width() and 0 <= e.y < wrld.height()
         ]
@@ -500,3 +504,6 @@ class TestCharacter(CharacterEntity):
         x, y = pos
         # Assuming wrld is accessible and has methods to check bounds and walls
         return (0 <= x < self.wrld.width()) and (0 <= y < self.wrld.height()) and not self.wrld.wall_at(pos[0], pos[1])
+
+    def manhattan_distance(point1, point2):
+        return sum(abs(p1 - p2) for p1, p2 in zip(point1, point2))
