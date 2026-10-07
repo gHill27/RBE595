@@ -26,6 +26,9 @@ class State(Enum):
 
 
 class TestCharacter(CharacterEntity):
+    DEATH_PENALTY = -100000.0
+    EXIT_BONUS = 100000.0
+    
     def __init__(self, name, avatar, x, y):
         super().__init__(name, avatar, x, y)
         self.wrld = None  # Initialize world reference
@@ -38,8 +41,8 @@ class TestCharacter(CharacterEntity):
         if len(sys.argv) > 1:
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
-            self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 3
+            self.EXPLORATION_PROB = 0.5
+        self.MONSTER_AVOID_RADUIS = 100
         self.dist = None
 
         # load weights from q_learning_weights.json
@@ -47,8 +50,6 @@ class TestCharacter(CharacterEntity):
             q_weights = json.load(f)["weights"]
             self.bomb_weights = q_weights["Bomb"]
             self.monster_weights = q_weights["Monster"]
-            self.far_weights = q_weights["Far"]
-
         
         # feature for walls destroyed
         self.walls_destroyed = 0
@@ -60,7 +61,7 @@ class TestCharacter(CharacterEntity):
 
     def define_state(self, wrld, distances_matrix):
         old_state = self.state
-        if self._is_bomb_active(wrld):
+        if self._is_bomb_active(wrld) or self.wrld.explosions.values():
             self.state = State.Bomb
             print(f'old state {old_state} --> {self.state}')
             return
@@ -76,13 +77,9 @@ class TestCharacter(CharacterEntity):
         
         mdist = self.get_min_monster_dist(self.wrld)
         if mdist:
-            if bomberman_dist_to_exit - mdist < 0 and bomberman_dist_to_exit > 0: 
-                self.state = State.Free
-            elif abs(mdist - bomberman_dist_to_exit) <= self.MONSTER_AVOID_RADUIS: #close to monster!
-                self.state = State.Monster
-            elif mdist > 0:
-                self.state = State.FarFromMonster
-
+            self.state = State.Monster
+        else:
+            self.state = State.Free
         print(f'old state {old_state} --> {self.state}')
 
     def do(self, wrld):
@@ -108,18 +105,13 @@ class TestCharacter(CharacterEntity):
                     dy = next_step[1] - self.y
                     self.move(dx,dy)  # skip analysis and just move
                 else:
-                    self.state = State.FarFromMonster #TODO actually make this smarter maybe
+                    self.state = State.Free #TODO actually make this smarter maybe
                 return
 
             case State.Bomb:
                 weight = self.bomb_weights 
                 name = "Bomb"
                 self.weights = self.bomb_weights
-
-            case State.FarFromMonster:
-                weight = self.far_weights
-                name = "Far"
-                self.weights = self.far_weights
 
             case State.Monster:
                 weight = self.monster_weights
@@ -138,13 +130,15 @@ class TestCharacter(CharacterEntity):
         exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
              for e in sim_s_prime.events)
         died = terminal and not exited
-
-        
+        # step_world = SensedWorld.from_world(self.wrld)
+        # next_world, events = step_world.next()
+        # event_score, _ = self._evaluate_events(next_world, events)
         reward = -1*sim_s_prime.scores[self.name] - -1*wrld.scores[self.name]
         if exited:
             reward = 10000
         if died:
             reward -= 1000
+        # reward += event_score
         reward = reward/100.0 # scaling so it doesnt get massive weights 
         if terminal:
             delta = reward - Q_s_a
@@ -215,14 +209,15 @@ class TestCharacter(CharacterEntity):
         p1 = self.weights[0] * features[0]
         p2 = self.weights[1] * features[1]
         p3 = self.weights[2] * features[2]
-        return p1 + p2 + p3
+        p4 = self.weights[2] * features[3]
+        return p1 + p2 + p3 + p4
 
     def computefeatures(self,wrld):
         #get weights here and compute
         if wrld.me(self) is None:
             exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
                      for e in wrld.events)
-            return (0.0, 1.0, 0.0) if exited else (1.0, 0.0, 1.0)
+            return (0.0, 1.0, 0.0, 0.0) if exited else (1.0, 0.0, 1.0, 1.0)
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
         #f2
@@ -230,11 +225,14 @@ class TestCharacter(CharacterEntity):
         d = self.dist[wrld.me(self).y][wrld.me(self).x]
         if d <= 0:
             d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
-            f2 = -1/(1+d)
+            f2 = 1/(1+d)
         else:
-            f2 = -d/maxd              
+            f2 = d/maxd              
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
-        return (f1, f2, f3)
+
+        # combined distance to explosion and monsters
+        f4 = 1/(1+self.get_min_explosion_dist(wrld) + self.get_min_monster_dist(wrld))
+        return (f1, f2, f3, f4)
 
     def get_valid_moves(self,wrld):
         x = wrld.me(self).x
@@ -356,7 +354,7 @@ class TestCharacter(CharacterEntity):
         # Reason 2: a monster is very close
         for mlist in wrld.monsters.values():
             for m in mlist:
-                if max(abs(m.x - x), abs(m.y - y)) <= 2:
+                if max(abs(m.x - x), abs(m.y - y)) <= self.MONSTER_AVOID_RADUIS:
                     return True
 
         return False
@@ -383,7 +381,7 @@ class TestCharacter(CharacterEntity):
         with open(filename, "w") as f:
             json.dump(data, f, indent=2)
 
-    def get_min_monster_dist(self,wrld, default=100):
+    def get_min_monster_dist(self,wrld, default=0):
         """Chebyshev distance from me to the nearest monster in `wrld`.
         Measures from the position in `wrld`, so it works on simulated worlds."""
         me = wrld.me(self)
@@ -394,7 +392,7 @@ class TestCharacter(CharacterEntity):
             for mlist in wrld.monsters.values()
             for m in mlist
         ]
-        return min(dists, default=default)
+        return sum(dists)
     
     # def get_min_bomb_dist(self,wrld):
     #     bomb_dists = []
@@ -414,11 +412,21 @@ class TestCharacter(CharacterEntity):
             if event.tpe == event.BOMB_HIT_CHARACTER:
                 return 0
 
+        
+        w, h = wrld.width(), wrld.height()
+        danger_mask = self._compute_danger_mask(wrld, w, h)
+        danger_location = []
+        for y, list in enumerate(danger_mask):
+            for x, danger_boolean in enumerate(list):
+                if danger_boolean:
+                    danger_location.append((x,y)) 
+
         dists = [
-            self.chebyshev_distance((e.x, e.y), (me.x, me.y))
-            for e in wrld.explosions.values()
-            if 0 <= e.x < wrld.width() and 0 <= e.y < wrld.height()
-        ]
+                    self.chebyshev_distance((x, y), (me.x, me.y))
+                    for (x,y) in danger_location
+                    if 0 <= x < wrld.width() and 0 <= y < wrld.height()
+                ]
+        # print("explosion_dists: " + str(dists))
         return min(dists, default=default)
 
     def compute_distances(self, start_cell):
@@ -461,3 +469,60 @@ class TestCharacter(CharacterEntity):
         x, y = pos
         # Assuming wrld is accessible and has methods to check bounds and walls
         return (0 <= x < self.wrld.width()) and (0 <= y < self.wrld.height()) and not self.wrld.wall_at(pos[0], pos[1])
+
+    def _compute_danger_mask(self, wrld, width, height):
+        danger = np.zeros((height, width), dtype=bool)
+
+        for expl in wrld.explosions.values():
+            if 0 <= expl.x < width and 0 <= expl.y < height:
+                danger[expl.y, expl.x] = True
+
+        for bomb in wrld.bombs.values():
+            timer = getattr(bomb, 'timer', 2)
+            if timer <= 2:
+                self._mask_blast(wrld, bomb.x, bomb.y, width, height, danger)
+
+        return danger
+
+    def _mask_blast(self, wrld, bx, by, width, height, danger):
+        danger[by, bx] = True
+        expl_range = getattr(wrld, 'expl_range', 4)
+        for dx, dy in ((-1,0), (1,0), (0,-1), (0,1)):
+            for r in range(1, expl_range + 1):
+                nx, ny = bx + dx * r, by + dy * r
+                if not (0 <= nx < width and 0 <= ny < height):
+                    break
+                danger[ny, nx] = True
+                if wrld.wall_at(nx, ny):
+                    break
+
+    def _evaluate_events(self, next_world, events):
+            """
+            Scans all events in the tick with ownership verification.
+            Returns: (event_score, is_terminal)
+            """
+            total = 0.0
+            for e in events:
+                owner_name = getattr(e.character, 'name', None)
+                mine = (owner_name == self.name)
+    
+                if e.tpe == Event.CHARACTER_FOUND_EXIT and mine:
+                    return self.EXIT_BONUS, True
+    
+                if e.tpe == Event.CHARACTER_KILLED_BY_MONSTER and mine:
+                    return self.DEATH_PENALTY, True
+    
+                if e.tpe == Event.BOMB_HIT_CHARACTER:
+                    victim_name = getattr(e.other, 'name', None)
+                    if victim_name == self.name:
+                        return self.DEATH_PENALTY, True
+                    elif mine:
+                        total += 5000.0
+    
+                elif e.tpe == Event.BOMB_HIT_MONSTER and mine:
+                    total += 50.0
+    
+                elif e.tpe == Event.BOMB_HIT_WALL and mine:
+                    total += 10.0
+    
+            return total, False
