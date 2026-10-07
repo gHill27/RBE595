@@ -34,7 +34,7 @@ class TestCharacter(CharacterEntity):
         self.GAMMA = 0.9
         self.LEARNING_RATE = 0.01
         self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 4
+        self.MONSTER_AVOID_RADUIS = 2
         self.dist = None
 
         # load weights from q_learning_weights.json
@@ -136,7 +136,7 @@ class TestCharacter(CharacterEntity):
         died = terminal and not exited
 
         
-        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name]
+        reward = -1*sim_s_prime.scores[self.name] - -1*wrld.scores[self.name]
 
         if died:
             reward -= 1000
@@ -228,7 +228,11 @@ class TestCharacter(CharacterEntity):
             return (0.0, 1.0, 0.0) if exited else (1.0, 0.0, 1.0)
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
-        f2 = 1/(1+self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell))              
+        #f2
+        d = self.dist[wrld.me(self).y][wrld.me(self).x]
+        if d <= 0:
+            d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
+        f2 = 1/(1+d)              
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
         return (f1, f2, f3)
 
