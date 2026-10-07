@@ -15,6 +15,7 @@ import os
 import random
 import math
 from events import Event
+import sys
 
 class State(Enum):
     Free = 1
@@ -32,9 +33,12 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.01
-        self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 2
+        self.LEARNING_RATE = 0.2
+        if len(sys.argv) > 1:
+            self.EXPLORATION_PROB = float(sys.argv[1])
+        else:
+            self.EXPLORATION_PROB = 0.0
+        self.MONSTER_AVOID_RADUIS = 4
         self.dist = None
 
         # load weights from q_learning_weights.json
@@ -89,7 +93,6 @@ class TestCharacter(CharacterEntity):
         goal = wrld.exitcell
         distances_matrix = self.compute_distances(wrld.exitcell)
         self.dist = distances_matrix
-       
         name: str = None
         weight: dict = None
         #state logic:
@@ -210,6 +213,12 @@ class TestCharacter(CharacterEntity):
                 bestQ = currQ
                 bestmove = move
                 bestwrld = nxt
+        # explore areas with no known Q-value with some probability exploration_prob
+        if random.random() < self.EXPLORATION_PROB:
+            random_move = moves[int(random.random()*(len(moves)-1))]
+            bestmove = random_move
+            img_wrld = SensedWorld.from_world(wrld)   
+            bestwrld = self.move_entities(random_move,img_wrld)
 
         return (bestQ, bestmove, bestwrld)
 

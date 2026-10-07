@@ -8,8 +8,10 @@ total_runs = 100
 max_concurrent_workers = 1 
 
 def run_game(script_name):
+    exploration_prob = " 0.5"
+
     try:
-        result = subprocess.run([sys.executable, script_name], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([sys.executable, script_name, exploration_prob], capture_output=True, text=True, timeout=10)
         output = result.stdout
 
     except subprocess.TimeoutExpired as e:
