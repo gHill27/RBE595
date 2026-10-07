@@ -140,7 +140,7 @@ class TestCharacter(CharacterEntity):
 
         if died:
             reward -= 1000
-        reward = reward/100.0 # scaling so it doesnt get massive weights 
+        # reward = reward/100.0 # scaling so it doesnt get massive weights 
         if terminal:
             delta = reward - Q_s_a
 
@@ -412,8 +412,9 @@ class TestCharacter(CharacterEntity):
         Returns 0 only if I'm standing in an explosion (or dead);
         returns `default` (far away) when there is no explosion at all."""
         me = wrld.me(self)
-        if me is None:                  # dead in this simulated world
-            return 0
+        for event in wrld.events:
+            if event.tpe == self.BOMB_HIT_CHARACTER:
+                return 0
 
         dists = [
             self.chebyshev_distance((e.x, e.y), (me.x, me.y))
