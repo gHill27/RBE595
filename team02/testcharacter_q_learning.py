@@ -1,4 +1,5 @@
 # This is necessary to find the main code
+from calendar import c
 import sys
 sys.path.insert(0, '../bomberman')
 # Import necessary stuff
@@ -38,7 +39,7 @@ class TestCharacter(CharacterEntity):
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
             self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 4
+        self.MONSTER_AVOID_RADUIS = 3
         self.dist = None
 
         # load weights from q_learning_weights.json
@@ -140,10 +141,11 @@ class TestCharacter(CharacterEntity):
 
         
         reward = -1*sim_s_prime.scores[self.name] - -1*wrld.scores[self.name]
-
+        if exited:
+            reward = 10000
         if died:
             reward -= 1000
-        # reward = reward/100.0 # scaling so it doesnt get massive weights 
+        reward = reward/100.0 # scaling so it doesnt get massive weights 
         if terminal:
             delta = reward - Q_s_a
 
@@ -175,32 +177,37 @@ class TestCharacter(CharacterEntity):
         
         return best
     
-    def argmaxQ(self,wrld):
+    def argmaxQ(self,wrld, explore = False):
         pos = (wrld.me(self).x,wrld.me(self).y)
         moves = self.get_valid_moves(wrld) #returns dx dy
         bestQ = -math.inf
+        bestrank = -math.inf
         bestmove = (0,0)
         bestwrld = wrld
-        for move in moves:
-            img_wrld = SensedWorld.from_world(wrld)   
-            nxt = self.move_entities(move,img_wrld)
-            if nxt.me(self) is None:
-                exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
-                            for e in nxt.events)
-                currQ = 1e6 if exited else -1e6
-            else:
-                currQ = self.computeQfunction(nxt)
-            if currQ > bestQ:
-                bestQ = currQ
-                bestmove = move
-                bestwrld = nxt
-        # explore areas with no known Q-value with some probability exploration_prob
-        if random.random() < self.EXPLORATION_PROB:
-            random_move = moves[int(random.random()*(len(moves)-1))]
+        
+        if explore and random.random() < self.EXPLORATION_PROB:
+            random_move = random.choice(moves)
             bestmove = random_move
             img_wrld = SensedWorld.from_world(wrld)   
             bestwrld = self.move_entities(random_move,img_wrld)
+            bestQ = self.computeQfunction(bestwrld)
+        
+        else:
+            for move in moves:
+                img_wrld = SensedWorld.from_world(wrld)   
+                nxt = self.move_entities(move,img_wrld)
+                Q = self.computeQfunction(nxt)
+                rank = Q# used exclusively for picking the best move
+                if nxt.me(self) is None:
+                    exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
+                                for e in nxt.events)
+                    rank = 1e9 if exited else -1e9
 
+                if rank > bestrank:
+                    bestrank = rank
+                    bestQ = Q
+                    bestmove = move
+                    bestwrld = nxt
         return (bestQ, bestmove, bestwrld)
 
     def computeQfunction(self,wrld):
