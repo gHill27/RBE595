@@ -69,19 +69,24 @@ class TestCharacter(CharacterEntity):
         all_monsters = [
             (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
         ]
-        monster_distances = []
+        if not all_monsters:
+            self.state = State.Free if my_d > 0 else State.FarFromMonster
+            print(f'old state {old} --> {self.state}')
+            return
         
+        monster_distances = []
+        mdist = self.get_min_monster_dist(wrld)
         for monster in all_monsters:
             monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
-        
-        mdist = self.get_min_monster_dist(self.wrld)
-        if mdist:
-            if bomberman_dist_to_exit - mdist < 0 and bomberman_dist_to_exit > 0: 
-                self.state = State.Free
-            elif abs(mdist - bomberman_dist_to_exit) <= self.MONSTER_AVOID_RADUIS: #close to monster!
-                self.state = State.Monster
-            elif mdist > 0:
-                self.state = State.FarFromMonster
+
+        winning_race = bomberman_dist_to_exit > 0 and (not monster_distances or bomberman_dist_to_exit < min(monster_distances))
+
+        if winning_race:
+            self.state = State.Free
+        elif mdist <= self.MONSTER_AVOID_RADUIS: #close to monster!
+            self.state = State.Monster
+        else:
+            self.state = State.FarFromMonster
 
         print(f'old state {old_state} --> {self.state}')
 
