@@ -34,7 +34,7 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.001
+        self.LEARNING_RATE = 0.01
         if len(sys.argv) > 1:
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
@@ -245,26 +245,26 @@ class TestCharacter(CharacterEntity):
         if wrld.me(self) is None:
             exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
                      for e in wrld.events)
-            return (0.0, 1.0, 0.0, 0.0, 1.0) if exited else (1.0, 0.0, 1.0, 0.0, 1.0)
+            return (0.0, 1.0, 0.0, 1.0) if exited else (1.0, 0.0, 1.0, 1.0)
         
-        f1 = 1/(1+self.get_min_monster_dist(wrld))
-        #f2
         threat = False
         for monsters in wrld.monsters.values():
             for monster in monsters:
                 if self.Astar((wrld.me(self).x,wrld.me(self).y),(monster.x,monster.y)):
                     threat = True        
         if threat:
-            maxd = np.max(self.dist)
-            d = self.dist[wrld.me(self).y][wrld.me(self).x]
-            if d <= 0:
-                d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
-                # print(f'no ideal path using chebyshevs distance {d}')
-                f2 = -d/max(wrld.width(),wrld.height())
-            else:
-                f2 = -d/maxd
+            f1 = 1/(1+self.get_min_monster_dist(wrld))
         else:
-            f2 = 0  
+            f1 = 0  
+        #f2
+        maxd = np.max(self.dist)
+        d = self.dist[wrld.me(self).y][wrld.me(self).x]
+        if d <= 0:
+            d = math.dist((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
+            # print(f'no ideal path using chebyshevs distance {d}')
+            f2 = -d/max(wrld.width(),wrld.height())
+        else:
+            f2 = -d/maxd
         # print(threat)
 
         if (wrld.me(self).x, wrld.me(self).y) in self.simulate_explosion_danger_cells(wrld):
