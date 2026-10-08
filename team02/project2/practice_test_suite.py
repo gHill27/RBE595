@@ -2,7 +2,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-variants = ["variant1.py", "variant2.py", "variant3.py", "variant4.py", "variant5.py"]
+variants = ["variant2_map2.py", "variant3_map2.py", "variant4_map2.py", "variant5_map2.py"]
 
 monster_game = "test_monster.py"
 # variants = ["variant1.py", "variant2.py", "variant3.py", "variant4.py", "variant5.py"]

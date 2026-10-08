@@ -34,7 +34,7 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.01
+        self.LEARNING_RATE = 0.001
         if len(sys.argv) > 1:
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
@@ -42,6 +42,9 @@ class TestCharacter(CharacterEntity):
         self.MONSTER_AVOID_RADUIS = 3
         self.dist = None
         self.pos_history = deque(maxlen=11)
+        self.no_path_ticks = 0      # consecutive turns A* has failed 
+        self.NO_PATH_THRESHOLD = 3  
+        
        
 
         # load weights from q_learning_weights.json
@@ -246,14 +249,23 @@ class TestCharacter(CharacterEntity):
         
         f1 = 1/(1+self.get_min_monster_dist(wrld))
         #f2
-        maxd = np.max(self.dist)
-        d = self.dist[wrld.me(self).y][wrld.me(self).x]
-        if d <= 0:
-            d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
-            # print(f'no ideal path using chebyshevs distance {d}')
-            f2 = -d/max(wrld.width(),wrld.height())
+        threat = False
+        for monsters in wrld.monsters.values():
+            for monster in monsters:
+                if self.Astar((wrld.me(self).x,wrld.me(self).y),(monster.x,monster.y)):
+                    threat = True        
+        if threat:
+            maxd = np.max(self.dist)
+            d = self.dist[wrld.me(self).y][wrld.me(self).x]
+            if d <= 0:
+                d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
+                # print(f'no ideal path using chebyshevs distance {d}')
+                f2 = -d/max(wrld.width(),wrld.height())
+            else:
+                f2 = -d/maxd
         else:
-            f2 = -d/maxd  
+            f2 = 0  
+        # print(threat)
 
         if (wrld.me(self).x, wrld.me(self).y) in self.simulate_explosion_danger_cells(wrld):
             f3 = 1.0         
@@ -393,27 +405,38 @@ class TestCharacter(CharacterEntity):
         x, y = wrld.me(self).x, wrld.me(self).y
 
         # Reason 1: no path to the exit, and a wall is right next to me
-        if not self.Astar((x,y), wrld.exitcell):
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    nx, ny = x + dx, y + dy
-                    if (dx, dy) != (0, 0) and 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
-                        if wrld.wall_at(nx, ny):
-                            return True
+        if self.Astar((x,y),wrld.exitcell):
+            self.no_path_ticks = 0
+        else:
+            self.no_path_ticks += 1
+
+        wall_adjacent = any(
+            wrld.wall_at(x + dx, y + dy)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+            if 0 <= x + dx < wrld.width() and 0 <= y + dy < wrld.height()
+        )
+        # Reason 1: blocked for several turns in a row AND touching a wall
+        if self.no_path_ticks >= self.NO_PATH_THRESHOLD and wall_adjacent:
+            return self._arm_bomb()
+
 
         # Reason 2: a monster is very close
         for mlist in wrld.monsters.values():
             for m in mlist:
                 if max(abs(m.x - x), abs(m.y - y)) <= 2:
-                    return True
+                    return self._arm_bomb()
 
         #reason 3: best move is to stay still, maybe try bombing to fix it? 
         displacement = self.net_displacement()
-        if  displacement < 2:
+        if displacement < 2 and self.no_path_ticks > 0 and wall_adjacent:
             return True
 
         return False
-
+    
+    def _arm_bomb(self):
+        self.no_path_ticks = 0
+        return True
+    
     def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
         # 1. Load existing file if it exists, otherwise start with a fresh structure
         if os.path.exists(filename):
@@ -510,9 +533,11 @@ class TestCharacter(CharacterEntity):
                     
         return distances
 
-    def simulate_explosion_danger_cells(self,wrld,blast_range=4):
+    def simulate_explosion_danger_cells(self,wrld,blast_range=4,timer_threshold=3):
         cells = {(e.x, e.y) for e in wrld.explosions.values()}
         for b in wrld.bombs.values():
+            if b.timer > timer_threshold:
+                continue 
             cells.add((b.x, b.y))
             for dx, dy in ((1,0), (-1,0), (0,1), (0,-1)):
                 for i in range(1, blast_range + 1):
