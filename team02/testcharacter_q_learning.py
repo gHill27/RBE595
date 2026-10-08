@@ -38,12 +38,12 @@ class TestCharacter(CharacterEntity):
         if len(sys.argv) > 1:
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
-            self.EXPLORATION_PROB = 0.0
+            self.EXPLORATION_PROB = 0.00
         self.MONSTER_AVOID_RADUIS = 3
         self.dist = None
         self.pos_history = deque(maxlen=11)
         self.no_path_ticks = 0      # consecutive turns A* has failed 
-        self.NO_PATH_THRESHOLD = 3  
+        self.NO_PATH_THRESHOLD = 5  
         
        
 
@@ -61,7 +61,7 @@ class TestCharacter(CharacterEntity):
         self.weights = None
     
     def _is_bomb_active(self, wrld):
-        return len(wrld.bombs) > 0
+        return len(wrld.bombs) > 0 or len(wrld.explosions) > 0 or getattr(self, 'maybe_place_bomb', False)
 
     def define_state(self, wrld, distances_matrix):
         old_state = self.state
@@ -151,21 +151,21 @@ class TestCharacter(CharacterEntity):
         #should then go delta <- real reward + gamma * argmax Q(s',a') - Q(s,a) DONE
         #should then update weight <- weight + learning factor * f1(s,a) DONE
         
-        Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld)
-        # print(f'Q(s,a) = {Q_s_a} \n best move is {best_move}')
+        Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld,explore=True)
+        print(f'Q(s,a) = {Q_s_a} \n best move is {best_move}')
         terminal = sim_s_prime.me(self) is None
         exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
              for e in sim_s_prime.events)
         died = terminal and not exited
 
         
-        reward = -1*sim_s_prime.scores[self.name] - -1*wrld.scores[self.name]
+        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name] - 2 
         if exited:
-            reward = 10000
+            reward += 10000.0
         if died:
-            reward -= 1000
+            reward -= 1000.0
         reward = reward/100.0 # scaling so it doesnt get massive weights 
-        # print(f'reward is {reward}')
+        print(f'reward is {reward}')
         if terminal:
             delta = reward - Q_s_a
 
@@ -175,7 +175,7 @@ class TestCharacter(CharacterEntity):
             delta = reward + q_sp_ap*self.GAMMA - Q_s_a
         # print(f'delta is {delta}')
 
-        features_s_a = self.computefeatures(sim_s_prime) 
+        features_s_a = self.computefeatures(sim_s_prime,debug=True) 
         
         for index, weight in enumerate(self.weights):
             self.weights[index] = weight + self.LEARNING_RATE * delta * features_s_a[index]
@@ -185,7 +185,6 @@ class TestCharacter(CharacterEntity):
             self.place_bomb()
 
         self.move(*best_move)
-
 
 
     def get_blocked_move(self,pos,goal):
@@ -240,14 +239,13 @@ class TestCharacter(CharacterEntity):
         p4 = self.weights[3] * features[3]
         return p1 + p2 + p3 + p4
 
-    def computefeatures(self,wrld):
+    def computefeatures(self,wrld, debug=False):
         #get weights here and compute
         if wrld.me(self) is None:
             exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
                      for e in wrld.events)
             return (0.0, 1.0, 0.0, 1.0) if exited else (1.0, 0.0, 1.0, 1.0)
         
-
         R = 6
         dmon = self.get_min_monster_dist(wrld)
         f1 = 0.0 if dmon >= 1000 else max(0.0, (R - dmon) / R)
@@ -269,11 +267,14 @@ class TestCharacter(CharacterEntity):
     
         #added number of neighbors weight to incentivise moves in the open.
         num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
-        f4 = 1/(10 - num_of_neighbors)
-        # f4 = 0
-        # print(
-        #     f"f1 = {f1} \nf2 = {f2} \nf3 = {f3} \nf4 = {f4}"
-        # )
+        # f4: Openness / Mobility
+        # num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
+        # f4 = num_of_neighbors / 9.0
+        f4 = 0
+        if debug: 
+            print(
+                f"f1 = {f1} \nf2 = {f2} \nf3 = {f3} \nf4 = {f4}"
+            )
         return [f1, f2, f3, f4]
 
     def get_valid_moves(self,wrld):
@@ -393,42 +394,90 @@ class TestCharacter(CharacterEntity):
         return max(abs(a - b) for a, b in zip(point1, point2))
 
     #BOMBING CODE:
-    def should_bomb(self, wrld,move) -> bool:
-        # Never stack bombs
-        if wrld.bombs:
+    def has_safe_escape(self, wrld, bx, by, fuse=10, blast_range=4):
+        """Verifies whether the agent can escape the blast cross before detonation."""
+        # 1. Compute blast cross for the prospective bomb
+        blast_cells = {(bx, by)}
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            for i in range(1, blast_range + 1):
+                nx, ny = bx + dx * i, by + dy * i
+                if not (0 <= nx < wrld.width() and 0 <= ny < wrld.height()):
+                    break
+                blast_cells.add((nx, ny))
+                if wrld.wall_at(nx, ny):
+                    break
+
+        # 2. Monsters act as impassable hazards for the escape route
+        monster_cells = {(m.x, m.y) for ml in wrld.monsters.values() for m in ml}
+
+        # 3. BFS search from the character's position
+        start = (bx, by)
+        queue = deque([(start[0], start[1], 0)])
+        visited = {start}
+
+        while queue:
+            cx, cy, steps = queue.popleft()
+
+            if steps > fuse:
+                return False
+
+            # Found a reachable tile outside the prospective blast zone
+            if (cx, cy) not in blast_cells:
+                return True
+
+            for dx, dy in ((1,0), (-1,0), (0,1), (0,-1), (1,1), (-1,-1), (1,-1), (-1,1)):
+                nx, ny = cx + dx, cy + dy
+                if (0 <= nx < wrld.width() and 0 <= ny < wrld.height()
+                        and not wrld.wall_at(nx, ny)
+                        and (nx, ny) not in monster_cells
+                        and (nx, ny) not in visited):
+                    visited.add((nx, ny))
+                    queue.append((nx, ny, steps + 1))
+
+        return False
+    def should_bomb(self, wrld, move=None) -> bool:
+        # Precondition 1: Never stack bombs or drop into active fire
+        if self._is_bomb_active(wrld):
             return False
 
         x, y = wrld.me(self).x, wrld.me(self).y
 
-        # Reason 1: no path to the exit, and a wall is right next to me
-        if self.Astar((x,y),wrld.exitcell):
+        # Precondition 2: HARD SUICIDE CHECK - abort if no escape exists
+        if not self.has_safe_escape(wrld, x, y):
+            return False
+
+        # Track path availability to exit
+        if self.Astar((x, y), wrld.exitcell):
             self.no_path_ticks = 0
         else:
             self.no_path_ticks += 1
 
+        # Check for adjacent walls (cardinal directions only)
         wall_adjacent = any(
             wrld.wall_at(x + dx, y + dy)
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
             if 0 <= x + dx < wrld.width() and 0 <= y + dy < wrld.height()
         )
-        # Reason 1: blocked for several turns in a row AND touching a wall
+
+        # Tactical Trigger 1: Path is blocked to the exit and touching an obstacle
         if self.no_path_ticks >= self.NO_PATH_THRESHOLD and wall_adjacent:
             return self._arm_bomb()
 
-
-        # Reason 2: a monster is very close
+        # Tactical Trigger 2: Defensive monster bombing
+        # Only deploy if monster is closing in (dist <= 3) AND at least 2 tiles away (not fatal contact)
         for mlist in wrld.monsters.values():
             for m in mlist:
-                if max(abs(m.x - x), abs(m.y - y)) <= 2:
+                dist = max(abs(m.x - x), abs(m.y - y))
+                if 2 <= dist <= 3:
                     return self._arm_bomb()
 
-        #reason 3: best move is to stay still, maybe try bombing to fix it? 
+        # Tactical Trigger 3: Oscillation / Stagnation in front of a wall
         displacement = self.net_displacement()
-        if displacement < 2 and self.no_path_ticks > 0:
-            return True
+        if displacement < 2 and self.no_path_ticks >= self.NO_PATH_THRESHOLD and wall_adjacent:
+            return self._arm_bomb()
 
         return False
-    
+
     def _arm_bomb(self):
         self.no_path_ticks = 0
         return True
