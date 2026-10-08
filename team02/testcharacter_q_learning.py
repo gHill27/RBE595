@@ -36,7 +36,7 @@ class TestCharacter(CharacterEntity):
         self.GAMMA = 0.9
         self.LEARNING_RATE = 0.01
         self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 5
+        self.MONSTER_AVOID_RADUIS = 10
         self.dist = None
         self.pos_history = deque(maxlen=11)
        
@@ -69,7 +69,7 @@ class TestCharacter(CharacterEntity):
                 self.state = State.Bomb
                 print(f'old state {old_state} --> {self.state}')
                 return 
-            self.state = State.Free if bomberman_dist_to_exit > 0 else State.FarFromMonster
+            self.state = State.Free
             print(f'old state {old_state} --> {self.state}')
             return
         
@@ -82,11 +82,12 @@ class TestCharacter(CharacterEntity):
             monster_distance_to_exit.append(self.chebyshev_distance((monster[0],monster[1]),wrld.exitcell))
             monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
 
+        # doesn't work if there are walls blocking the path
         winning_race = bomberman_dist_to_exit > 0 and (not monster_distances or bomberman_dist_to_exit < min(monster_distances))
 
-        if winning_race:
-            self.state = State.Free
-        elif self._is_bomb_active(wrld):
+        # if winning_race:
+        #     self.state = State.Free
+        if self._is_bomb_active(wrld):
             self.state = State.Bomb            
         elif mdist <= self.MONSTER_AVOID_RADUIS: #close to monster!
             self.state = State.Monster
@@ -113,6 +114,10 @@ class TestCharacter(CharacterEntity):
             case State.Free:
                 self.path = self.Astar(pos,goal)[1:]
                 if self.path:
+                    # for move in self.path:
+                    #     # remove walls in the way
+                    #     if wrld.wall_at(move[0], move[1]):
+                    #         self.place_bomb()
                     best_move = self.path.pop(0)
                     # no need to look at Q-values if we have a free path to the exit
                     next_step = best_move
@@ -121,11 +126,17 @@ class TestCharacter(CharacterEntity):
                     self.move(dx,dy)  # skip analysis and just move
                     return
                 else:
-                    self.state = State.FarFromMonster #TODO actually make this smarter maybe
-                    print('debug to far state ')
-                    weight = self.far_weights
-                    name = "Far"
-                    self.weights = self.far_weights
+                    # clear a path
+                    self.place_bomb()
+                    next_best_pos = self.get_blocked_move(pos,wrld.exitcell)
+                    next_best_move = (next_best_pos[0]-wrld.me(self).x, next_best_pos[1]-wrld.me(self).y)
+                    self.move(*next_best_move)
+                    return
+                    # self.state = State.FarFromMonster #TODO actually make this smarter maybe
+                    # print('debug to far state ')
+                    # weight = self.far_weights
+                    # name = "Far"
+                    # self.weights = self.far_weights
 
             case State.Bomb:
                 weight = self.bomb_weights 
@@ -194,12 +205,18 @@ class TestCharacter(CharacterEntity):
         
         return best
     
-    def argmaxQ(self,wrld, explore = False):
+    def argmaxQ(self,wrld, explore = True):
         pos = (wrld.me(self).x,wrld.me(self).y)
         moves = self.get_valid_moves(wrld) #returns dx dy
         bestQ = -math.inf
         bestrank = -math.inf
-        bestmove = (0,0)
+        self.path = self.Astar(pos,wrld.exitcell)[1:]
+        if self.path:
+            A_star_move = self.path.pop(0)
+            bestmove = (wrld.me(self).x-A_star_move[0], wrld.me(self).y-A_star_move[1])
+        else:
+            next_best_pos = self.get_blocked_move(pos,wrld.exitcell)
+            bestmove = (wrld.me(self).x-next_best_pos[0], wrld.me(self).y-next_best_pos[1])
         bestwrld = wrld
         
         if explore and random.random() < self.EXPLORATION_PROB:
@@ -254,8 +271,8 @@ class TestCharacter(CharacterEntity):
         #     f2 = d/maxd     
         d = self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
         f2 = 1/(1+d)
-        print("distance to exit: " + str(d)) 
-        print("f2: " + str(f2))                 
+        # print("distance to exit: " + str(d)) 
+        # print("f2: " + str(f2))                 
         f3 = 1/(1+self.get_min_explosion_dist(wrld))
 
         # combined distance to monsters
@@ -413,23 +430,32 @@ class TestCharacter(CharacterEntity):
 
         # Reason 1: no path to the exit, and a wall is right next to me
         if not self.Astar((x,y), wrld.exitcell):
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
+            for (dx,dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
                     nx, ny = x + dx, y + dy
                     if (dx, dy) != (0, 0) and 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
                         if wrld.wall_at(nx, ny):
+                            print("no path to exit")
                             return True
+
 
         # Reason 2: a monster is very close
         for mlist in wrld.monsters.values():
             for m in mlist:
-                if max(abs(m.x - x), abs(m.y - y)) <= self.MONSTER_AVOID_RADUIS:
+                if max(abs(m.x - x), abs(m.y - y)) <= (self.MONSTER_AVOID_RADUIS-3):
+                    print("a monster is very close")
                     return True
 
         #reason 3: best move is to stay still, maybe try bombing to fix it? 
         displacement = self.net_displacement()
         if  displacement < 2:
+            print("no displacement")
             return True
+
+        for move in self.path:
+            # remove walls in the way of A* path
+            if wrld.wall_at(move[0], move[1]):
+                print("wall in path")
+                return True
 
         return False
 

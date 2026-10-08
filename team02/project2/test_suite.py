@@ -2,17 +2,17 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-variants = ["variant2_map2.py", "variant3_map2.py", "variant4_map2.py", "variant5_map2.py"]
+#variants = ["variant2_map2.py", "variant3_map2.py", "variant4_map2.py", "variant5_map2.py"]
 
 monster_game = "test_monster.py"
-# variants = ["variant1.py", "variant2.py", "variant3.py", "variant4.py", "variant5.py"]
+variants = ["variant1.py", "variant2.py", "variant3.py", "variant4.py", "variant5.py"]
 variant_wins = [0]*len(variants)
 num_batches_per_variant = [10]*len(variants)
 num_thread_workers = 1
 
 def run_variant(variant_name):
     try:
-        result = subprocess.run([sys.executable, variant_name], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([sys.executable, variant_name], capture_output=True, text=True, timeout=20)
         output = result.stdout
 
     except subprocess.TimeoutExpired as e:
