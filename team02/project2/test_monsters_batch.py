@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 monster_game = "test_monster.py"
 # monster_game = "test_bomb.py"
-total_runs = 10
+total_runs = 40
 # Run up to 10 games at the exact same time to speed things up
 max_concurrent_workers = 1 
 

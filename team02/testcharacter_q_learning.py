@@ -146,7 +146,7 @@ class TestCharacter(CharacterEntity):
         #should then update weight <- weight + learning factor * f1(s,a) DONE
         
         Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld)
-        print(f'Q(s,a) = {Q_s_a} \n best move is {best_move}')
+        # print(f'Q(s,a) = {Q_s_a} \n best move is {best_move}')
         terminal = sim_s_prime.me(self) is None
         exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
              for e in sim_s_prime.events)
@@ -159,15 +159,15 @@ class TestCharacter(CharacterEntity):
         if died:
             reward -= 1000
         reward = reward/100.0 # scaling so it doesnt get massive weights 
-        print(f'reward is {reward}')
+        # print(f'reward is {reward}')
         if terminal:
             delta = reward - Q_s_a
 
         else:
             q_sp_ap = self.argmaxQ(sim_s_prime)[0]
-            print(f"Q(s',a') is {q_sp_ap}")
+            # print(f"Q(s',a') is {q_sp_ap}")
             delta = reward + q_sp_ap*self.GAMMA - Q_s_a
-        print(f'delta is {delta}')
+        # print(f'delta is {delta}')
 
         features_s_a = self.computefeatures(sim_s_prime) 
         
@@ -232,8 +232,7 @@ class TestCharacter(CharacterEntity):
         p2 = self.weights[1] * features[1]
         p3 = self.weights[2] * features[2]
         p4 = self.weights[3] * features[3]
-        p5 = self.weights[4] * features[4]
-        return p1 + p2 + p3 + p4 + p5
+        return p1 + p2 + p3 + p4
 
     def computefeatures(self,wrld):
         #get weights here and compute
@@ -251,17 +250,20 @@ class TestCharacter(CharacterEntity):
             # print(f'no ideal path using chebyshevs distance {d}')
             f2 = -d/max(wrld.width(),wrld.height())
         else:
-            f2 = -d/maxd              
-        f3 = 1/(1+self.get_min_explosion_dist(wrld))
-        #add 2 more weights one for distance to bomb.
-        f4 = 1/(1+self.get_min_bomb_dist(wrld))
+            f2 = -d/maxd  
+
+        if (wrld.me(self).x, wrld.me(self).y) in self.simulate_explosion_danger_cells(wrld):
+            f3 = 1.0         
+        else: 
+            f3 = 0.0
+    
         #added number of neighbors weight to incentivise moves in the open.
         num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
-        f5 = 1/(10 - num_of_neighbors)
-        print(
-            f"f1 = {f1} \nf2 = {f2} \nf3 = {f3} \nf4 = {f4} \nf5 = {f5}"
-        )
-        return [f1, f2, f3, f4, f5]
+        f4 = 1/(10 - num_of_neighbors)
+        # print(
+        #     f"f1 = {f1} \nf2 = {f2} \nf3 = {f3} \nf4 = {f4}"
+        # )
+        return [f1, f2, f3, f4]
 
     def get_valid_moves(self,wrld):
         x = wrld.me(self).x
@@ -286,7 +288,7 @@ class TestCharacter(CharacterEntity):
             else:
                 valid_moves.append((direction[0], direction[1]))
         if valid_moves:
-            print(f"valid moves are {valid_moves}")
+            # print(f"valid moves are {valid_moves}")
             return valid_moves
         else:
             return [(0,0)]
@@ -360,10 +362,11 @@ class TestCharacter(CharacterEntity):
     def get_neighbors(self, pos):
         x, y = pos
         neighbors = []
+        explosion_cells = {(e.x, e.y) for e in self.wrld.explosions.values()}
         # Inline checks to avoid extra function call overhead
         for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1), (x, y),
                        (x + 1, y + 1), (x - 1, y - 1),(x+1,y-1),(x-1,y+1)):
-            if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny):
+            if 0 <= nx < self.wrld.width() and 0 <= ny < self.wrld.height() and not self.wrld.wall_at(nx, ny) and not (nx,ny) in explosion_cells:
                 neighbors.append((nx, ny))
         return neighbors
     
@@ -499,11 +502,26 @@ class TestCharacter(CharacterEntity):
                     
         return distances
 
+    def simulate_explosion_danger_cells(self,wrld,blast_range=4):
+        cells = {(e.x, e.y) for e in wrld.explosions.values()}
+        for b in wrld.bombs.values():
+            cells.add((b.x, b.y))
+            for dx, dy in ((1,0), (-1,0), (0,1), (0,-1)):
+                for i in range(1, blast_range + 1):
+                    x, y = b.x + dx*i, b.y + dy*i
+                    if not (0 <= x < wrld.width() and 0 <= y < wrld.height()):
+                        break
+                    cells.add((x, y))
+                    if wrld.wall_at(x, y):   # blast hits the wall and stops there
+                        break
+        return cells
+
+
     def is_valid_move(self, pos):
         # Check if the position is within bounds and not a wall
         x, y = pos
         # Assuming wrld is accessible and has methods to check bounds and walls
         return (0 <= x < self.wrld.width()) and (0 <= y < self.wrld.height()) and not self.wrld.wall_at(pos[0], pos[1])
 
-    def manhattan_distance(point1, point2):
+    def manhattan_distance(self,point1, point2):
         return sum(abs(p1 - p2) for p1, p2 in zip(point1, point2))
