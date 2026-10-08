@@ -12,7 +12,7 @@ num_thread_workers = 1
 
 def run_variant(variant_name):
     try:
-        result = subprocess.run([sys.executable, variant_name], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([sys.executable, variant_name], capture_output=True, text=True, timeout=)
         output = result.stdout
 
     except subprocess.TimeoutExpired as e:

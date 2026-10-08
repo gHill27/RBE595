@@ -35,8 +35,11 @@ class TestCharacter(CharacterEntity):
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
         self.LEARNING_RATE = 0.01
-        self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 5
+        if len(sys.argv) > 1:
+            self.EXPLORATION_PROB = float(sys.argv[1])
+        else:
+            self.EXPLORATION_PROB = 0.0
+        self.MONSTER_AVOID_RADUIS = 10
         self.dist = None
         self.pos_history = deque(maxlen=11)
        
@@ -47,8 +50,7 @@ class TestCharacter(CharacterEntity):
             self.bomb_weights = q_weights["Bomb"]
             self.monster_weights = q_weights["Monster"]
             self.far_weights = q_weights["Far"]
-
-        
+            self.free_weights = q_weights["Free"]
         # feature for walls destroyed
         self.walls_destroyed = 0
         # current weight set
@@ -59,20 +61,19 @@ class TestCharacter(CharacterEntity):
 
     def define_state(self, wrld, distances_matrix):
         old_state = self.state
-        
-        bomberman_dist_to_exit = distances_matrix[self.y][self.x] #row col
         all_monsters = [
-            (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
-        ]
-        if not all_monsters:
-            if self._is_bomb_active(wrld):
-                self.state = State.Bomb
-                print(f'old state {old_state} --> {self.state}')
-                return 
-            self.state = State.Free if bomberman_dist_to_exit > 0 else State.FarFromMonster
+                    (m.x, m.y) for mlist in wrld.monsters.values() for m in mlist
+                ]
+        # if not all_monsters:
+        #     self.state = State.Free
+        #     print(f'old state {old_state} --> {self.state}')
+        #     return
+        if self._is_bomb_active(wrld) or self.wrld.explosions.values():
+            self.state = State.Bomb
             print(f'old state {old_state} --> {self.state}')
             return
         
+        bomberman_dist_to_exit = self.chebyshev_distance((self.x,self.y),wrld.exitcell)
         monster_distances = []
         monster_distance_to_exit = []
         
@@ -82,14 +83,20 @@ class TestCharacter(CharacterEntity):
             monster_distance_to_exit.append(self.chebyshev_distance((monster[0],monster[1]),wrld.exitcell))
             monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
 
-        winning_race = bomberman_dist_to_exit > 0 and (not monster_distances or bomberman_dist_to_exit < min(monster_distances))
-
-        if winning_race:
-            self.state = State.Free
-        elif self._is_bomb_active(wrld):
-            self.state = State.Bomb            
-        elif mdist <= self.MONSTER_AVOID_RADUIS: #close to monster!
-            self.state = State.Monster
+        if monster_distance_to_exit:
+            go_to_exit = True
+            for dist in monster_distance_to_exit:
+                if bomberman_dist_to_exit > dist:
+                    go_to_exit = False
+            if go_to_exit:
+                self.state = State.Free
+                return
+        mdist = self.get_min_monster_dist(self.wrld)
+        if mdist:
+            if mdist <= self.MONSTER_AVOID_RADUIS:
+                self.state = State.Monster
+            else:
+                self.state = State.FarFromMonster
         else:
             self.state = State.FarFromMonster
         
@@ -111,21 +118,14 @@ class TestCharacter(CharacterEntity):
         #state logic:
         match self.state:
             case State.Free:
-                self.path = self.Astar(pos,goal)[1:]
-                if self.path:
-                    best_move = self.path.pop(0)
-                    # no need to look at Q-values if we have a free path to the exit
-                    next_step = best_move
-                    dx = next_step[0] - self.x
-                    dy = next_step[1] - self.y
-                    self.move(dx,dy)  # skip analysis and just move
-                    return
-                else:
-                    self.state = State.FarFromMonster #TODO actually make this smarter maybe
-                    print('debug to far state ')
-                    weight = self.far_weights
-                    name = "Far"
-                    self.weights = self.far_weights
+                weight = self.free_weights 
+                name = "Free"
+                self.weights = self.free_weights
+
+            case State.FarFromMonster:
+                weight = self.far_weights 
+                name = "Far"
+                self.weights = self.far_weights
 
             case State.Bomb:
                 weight = self.bomb_weights 
@@ -179,7 +179,18 @@ class TestCharacter(CharacterEntity):
             self.weights[index] = weight + self.LEARNING_RATE * delta * features_s_a[index]
 
         self.update_weight_category(name, self.weights)
-        if self.should_bomb(wrld,best_move):
+        # if self.should_bomb(wrld,pos) and best_move == (0,0):
+        # if wrld.bombs:
+        # if best_move == (0,0) and self.state != State.Bomb:
+        if self.state == State.Free:
+            best_move = self.Astar((self.x, self.y), wrld.exitcell)[1]
+            if not self.is_valid_move((self.x+best_move[0],self.y+best_move[1])):
+                best_pos = self.get_blocked_move(pos,goal)
+                best_move = (self.x - best_pos[0], self.y - best_pos[1])
+            self.move(*best_move)
+            # print("best_move: " + str(best_move))
+        else:
+        if best_move == (0,0):
             self.place_bomb()
         self.move(*best_move)
 
@@ -241,7 +252,7 @@ class TestCharacter(CharacterEntity):
         #get weights here and compute
         if wrld.me(self) is None:
             exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
-                        for e in wrld.events)
+                     for e in wrld.events)
             return (0.0, 1.0, 0.0, 0.0, 0.0, 0.0) if exited else (1.0, 0.0, 1.0, 1.0, 0.0, 0.0)
         f1 = 1/(1+self.get_min_monster_dist(wrld))
         #f2
@@ -286,7 +297,7 @@ class TestCharacter(CharacterEntity):
         # print("min corner dist: " + str(min_corner_dist))
         f6 = 1/(1+min_corner_dist)
         return (f1, f2, f3, f4, f5, f6)
-    
+
     def get_valid_moves(self,wrld):
         x = wrld.me(self).x
         y = wrld.me(self).y
@@ -423,12 +434,17 @@ class TestCharacter(CharacterEntity):
         # Reason 2: a monster is very close
         for mlist in wrld.monsters.values():
             for m in mlist:
-                if max(abs(m.x - x), abs(m.y - y)) <= self.MONSTER_AVOID_RADUIS:
+                if max(abs(m.x - x), abs(m.y - y)) <= 2:
                     return True
 
-        #reason 3: best move is to stay still, maybe try bombing to fix it? 
-        displacement = self.net_displacement()
-        if  displacement < 2:
+        # if self.state == State.FarFromMonster and random.random() < 0.5:
+
+        # clear walls if far from monster
+        if self.state == State.FarFromMonster:
+            return True
+
+        # need to clear a path
+        if not self.Astar(pos, wrld.exitcell):
             return True
 
         return False
@@ -466,7 +482,10 @@ class TestCharacter(CharacterEntity):
             for mlist in wrld.monsters.values()
             for m in mlist
         ]
-        return min(dists, default=default)
+        if dists:
+            return min(dists)
+        else:
+            return 0
     
     def get_min_bomb_dist(self, wrld, default=1000):
         me = wrld.me(self)
@@ -487,16 +506,10 @@ class TestCharacter(CharacterEntity):
             if event.tpe == event.BOMB_HIT_CHARACTER:
                 return 0
 
-        danger_mask = self._compute_danger_mask(wrld, wrld.width(), wrld.height())
-        dangers = []
-        for y, list in enumerate(danger_mask):
-            for x, danger in enumerate(list):
-                if danger:
-                    dangers.append((x,y))
-
         dists = [
-            self.manhattan_distance((danger[0], danger[1]), (me.x, me.y))
-            for danger in dangers
+            self.manhattan_distance((e.x, e.y), (me.x, me.y))
+            for e in wrld.explosions.values()
+            if 0 <= e.x < wrld.width() and 0 <= e.y < wrld.height()
         ]
         return min(dists, default=default)
 
@@ -568,29 +581,3 @@ class TestCharacter(CharacterEntity):
         if len(h) < 2:
             return 0
         return max(abs(h[-1][0] - h[0][0]), abs(h[-1][1] - h[0][1]))
-
-    def _compute_danger_mask(self, wrld, width, height):
-            danger = np.zeros((height, width), dtype=bool)
-    
-            for expl in wrld.explosions.values():
-                if 0 <= expl.x < width and 0 <= expl.y < height:
-                    danger[expl.y, expl.x] = True
-    
-            for bomb in wrld.bombs.values():
-                timer = getattr(bomb, 'timer', 2)
-                if timer <= 2:
-                    self._mask_blast(wrld, bomb.x, bomb.y, width, height, danger)
-    
-            return danger
-    
-    def _mask_blast(self, wrld, bx, by, width, height, danger):
-        danger[by, bx] = True
-        expl_range = getattr(wrld, 'expl_range', 4)
-        for dx, dy in ((-1,0), (1,0), (0,-1), (0,1)):
-            for r in range(1, expl_range + 1):
-                nx, ny = bx + dx * r, by + dy * r
-                if not (0 <= nx < width and 0 <= ny < height):
-                    break
-                danger[ny, nx] = True
-                if wrld.wall_at(nx, ny):
-                    break
