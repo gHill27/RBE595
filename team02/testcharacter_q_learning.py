@@ -26,6 +26,9 @@ class State(Enum):
 
 
 class TestCharacter(CharacterEntity):
+    DEATH_PENALTY = -100000.0
+    EXIT_BONUS = 100000.0
+    
     def __init__(self, name, avatar, x, y):
         super().__init__(name, avatar, x, y)
         self.wrld = None  # Initialize world reference
@@ -34,9 +37,9 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.01
+        self.LEARNING_RATE = 0.2
         self.EXPLORATION_PROB = 0.0
-        self.MONSTER_AVOID_RADUIS = 10
+        self.MONSTER_AVOID_RADIUS = 4
         self.dist = None
         self.pos_history = deque(maxlen=11)
        
@@ -47,7 +50,7 @@ class TestCharacter(CharacterEntity):
             self.bomb_weights = q_weights["Bomb"]
             self.monster_weights = q_weights["Monster"]
             self.far_weights = q_weights["Far"]
-
+            self.free_weights = q_weights["Free"]
         
         # feature for walls destroyed
         self.walls_destroyed = 0
@@ -82,14 +85,24 @@ class TestCharacter(CharacterEntity):
             monster_distance_to_exit.append(self.chebyshev_distance((monster[0],monster[1]),wrld.exitcell))
             monster_distances.append(distances_matrix[monster[1]][monster[0]]) #row col
 
+        wall_distances = []
+        wall_at_y = []
+        for y in range(wrld.height()):
+            walls_at_y = []
+            for x in range(wrld.width()):
+                if wrld.wall_at(x, y):
+                    walls_at_y.append((x,y))
+                    wall_distances.append(self.chebyshev_distance((self.x,self.y),(x,y)))
+            if len(walls_at_y) == wrld.width():
+                wall_at_y.append(y)
         # doesn't work if there are walls blocking the path
-        winning_race = bomberman_dist_to_exit > 0 and (not monster_distances or bomberman_dist_to_exit < min(monster_distances))
+        winning_race = (not monster_distances or ((bomberman_dist_to_exit < min(monster_distances)) and not wall_at_y))
 
-        # if winning_race:
-        #     self.state = State.Free
+        if winning_race:
+            self.state = State.Free
         if self._is_bomb_active(wrld):
             self.state = State.Bomb            
-        elif mdist <= self.MONSTER_AVOID_RADUIS: #close to monster!
+        elif mdist <= self.MONSTER_AVOID_RADIUS: #close to monster!
             self.state = State.Monster
         else:
             self.state = State.FarFromMonster
@@ -112,31 +125,35 @@ class TestCharacter(CharacterEntity):
         #state logic:
         match self.state:
             case State.Free:
-                self.path = self.Astar(pos,goal)[1:]
-                if self.path:
-                    # for move in self.path:
-                    #     # remove walls in the way
-                    #     if wrld.wall_at(move[0], move[1]):
-                    #         self.place_bomb()
-                    best_move = self.path.pop(0)
-                    # no need to look at Q-values if we have a free path to the exit
-                    next_step = best_move
-                    dx = next_step[0] - self.x
-                    dy = next_step[1] - self.y
-                    self.move(dx,dy)  # skip analysis and just move
-                    return
-                else:
-                    # clear a path
-                    self.place_bomb()
-                    next_best_pos = self.get_blocked_move(pos,wrld.exitcell)
-                    next_best_move = (next_best_pos[0]-wrld.me(self).x, next_best_pos[1]-wrld.me(self).y)
-                    self.move(*next_best_move)
-                    return
-                    # self.state = State.FarFromMonster #TODO actually make this smarter maybe
-                    # print('debug to far state ')
-                    # weight = self.far_weights
-                    # name = "Far"
-                    # self.weights = self.far_weights
+                weight = self.free_weights 
+                name = "Free"
+                self.weights = self.free_weights
+            # case State.Free:
+            #     self.path = self.Astar(pos,goal)[1:]
+            #     if self.path:
+            #         # for move in self.path:
+            #         #     # remove walls in the way
+            #         #     if wrld.wall_at(move[0], move[1]):
+            #         #         self.place_bomb()
+            #         best_move = self.path.pop(0)
+            #         # no need to look at Q-values if we have a free path to the exit
+            #         next_step = best_move
+            #         dx = next_step[0] - self.x
+            #         dy = next_step[1] - self.y
+            #         self.move(dx,dy)  # skip analysis and just move
+            #         return
+            #     else:
+            #         # clear a path
+            #         self.place_bomb()
+            #         next_best_pos = self.get_blocked_move(pos,wrld.exitcell)
+            #         next_best_move = (next_best_pos[0]-self.x, next_best_pos[1]-self.y)
+            #         self.move(*next_best_move)
+            #         return
+            #         # self.state = State.FarFromMonster #TODO actually make this smarter maybe
+            #         # print('debug to far state ')
+            #         # weight = self.far_weights
+            #         # name = "Far"
+            #         # self.weights = self.far_weights
 
             case State.Bomb:
                 weight = self.bomb_weights 
@@ -170,11 +187,17 @@ class TestCharacter(CharacterEntity):
         
         reward = -1*sim_s_prime.scores[self.name] - -1*wrld.scores[self.name]
         if exited:
-            reward = 10000
+            reward = 1000
         if died:
             reward -= 1000
         reward = reward/100.0 # scaling so it doesnt get massive weights 
+
+        step_world = SensedWorld.from_world(self.wrld)
+        next_world, events = step_world.next()
+        event_score, _ = self._evaluate_events(next_world, events)
         # print(f'reward is {reward}')
+        reward = event_score
+        reward = reward/100.0 # scaling so it doesnt get massive weights 
         if terminal:
             delta = reward - Q_s_a
 
@@ -191,6 +214,9 @@ class TestCharacter(CharacterEntity):
 
         self.update_weight_category(name, self.weights)
         if self.should_bomb(wrld,best_move):
+        # if best_move == (0,0):
+        # print("best_move: " + str(best_move))
+        # if self.should_bomb(wrld,pos) and best_move == (0,0):
             self.place_bomb()
         self.move(*best_move)
 
@@ -252,14 +278,15 @@ class TestCharacter(CharacterEntity):
         p4 = self.weights[3] * features[3]
         p5 = self.weights[4] * features[4]
         p6 = self.weights[5] * features[5]
-        return p1 + p2 + p3 + p4 + p5 + p6
+        p7 = self.weights[6] * features[6]
+        return p1 + p2 + p3 + p4 + p5 + p6 + p7
 
     def computefeatures(self,wrld):
         #get weights here and compute
         if wrld.me(self) is None:
             exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
                         for e in wrld.events)
-            return (0.0, 1.0, 0.0, 0.0, 0.0, 0.0) if exited else (1.0, 0.0, 1.0, 1.0, 0.0, 0.0)
+            return (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0) if exited else (1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0)
         f1 = 1/(1+self.get_min_monster_dist(wrld))
         #f2
         # maxd = np.max(self.dist)
@@ -286,12 +313,54 @@ class TestCharacter(CharacterEntity):
 
         # min distance to wall
         wall_distances = []
-        for x in range(wrld.width()):
-            for y in range(wrld.height()):
+        wall_at_y = []
+        for y in range(wrld.height()):
+            walls_at_y = []
+            for x in range(wrld.width()):
                 if wrld.wall_at(x, y):
-                    wall_distances.append(self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),(x,y)))
+                    walls_at_y.append((x,y))
+                    wall_distances.append(self.chebyshev_distance((self.x,self.y),(x,y)))
+            if len(walls_at_y) == wrld.width():
+                wall_at_y.append(y)
+        # print("wall_at_y: " + str(wall_at_y))
+        # wall at y
+        if wall_at_y: 
+            # distance to closest solid wall
+            dist = abs(self.y - wall_at_y[0])          
+            f5 = 1/(1+dist)
+        else:
+            f5 = 0
+
+                # min distance to wall
+        wall_distances = []
+        wall_at_y = []
+        for y in range(wrld.height()):
+            walls_at_y = []
+            for x in range(wrld.width()):
+                if wrld.wall_at(x, y):
+                    walls_at_y.append((x,y))
+                    wall_distances.append(self.chebyshev_distance((self.x,self.y),(x,y)))
+            if len(walls_at_y) == wrld.width():
+                wall_at_y.append(y)
+        # print("wall_at_y: " + str(wall_at_y))
+        # wall at y
+        monster_y_dists = []
+        # Reason 2: a monster is very close
+        for mlist in wrld.monsters.values():
+            for m in mlist:
+                monster_y_dists.append(abs(self.y-m.y))
+        # if wall_at_y and monster_y_dists: 
+        #     # solid wall between character and monster    
+        #     print("wall between monster and character")       
+        #     if abs(self.y - wall_at_y[0]) < min(monster_y_dists):
+        #         f5 = abs(self.y - wall_at_y[0])
+        #     else:
+        #         f5 = 0.
+        # else:
+        #     f5 = 0.
+        # print("wall between monster: " + str(f5))
         min_wall_dist = min(wall_distances)
-        f5 = 1/(1+min_wall_dist)
+        f6 = 1/(1+min_wall_dist)
         # print("min wall dist: " +str(min_wall_dist))
 
         # min distance to a corner
@@ -301,8 +370,8 @@ class TestCharacter(CharacterEntity):
             corner_distances.append(self.chebyshev_distance((wrld.me(self).x,wrld.me(self).y),corner))
         min_corner_dist = min(corner_distances)
         # print("min corner dist: " + str(min_corner_dist))
-        f6 = 1/(1+min_corner_dist)
-        return (f1, f2, f3, f4, f5, f6)
+        f7 = 1/(1+min_corner_dist)
+        return (f1, f2, f3, f4, f5, f6, f7)
     
     def get_valid_moves(self,wrld):
         x = wrld.me(self).x
@@ -425,31 +494,32 @@ class TestCharacter(CharacterEntity):
         # Never stack bombs
         # if wrld.bombs:
         #     return False
-
+        
         x, y = wrld.me(self).x, wrld.me(self).y
 
         # Reason 1: no path to the exit, and a wall is right next to me
-        if not self.Astar((x,y), wrld.exitcell):
-            for (dx,dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                    nx, ny = x + dx, y + dy
-                    if (dx, dy) != (0, 0) and 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
-                        if wrld.wall_at(nx, ny):
-                            print("no path to exit")
-                            return True
+        # if self.Astar((x,y), wrld.exitcell):
+        for (dx,dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                nx, ny = x + dx, y + dy
+                if (dx, dy) != (0, 0) and 0 <= nx < wrld.width() and 0 <= ny < wrld.height():
+                    if wrld.wall_at(nx, ny):
+                        print("no path to exit")
+                        return True
 
-
+        monster_y_dists = []
         # Reason 2: a monster is very close
         for mlist in wrld.monsters.values():
             for m in mlist:
-                if max(abs(m.x - x), abs(m.y - y)) <= (self.MONSTER_AVOID_RADUIS-3):
+                monster_y_dists.append(abs(self.y-m.y))
+                if max(abs(m.x - x), abs(m.y - y)) <= self.MONSTER_AVOID_RADIUS:
                     print("a monster is very close")
                     return True
 
         #reason 3: best move is to stay still, maybe try bombing to fix it? 
         displacement = self.net_displacement()
-        if  displacement < 2:
-            print("no displacement")
-            return True
+        # if  displacement < 2:
+        #     print("no displacement")
+        #     return True
 
         for move in self.path:
             # remove walls in the way of A* path
@@ -457,6 +527,27 @@ class TestCharacter(CharacterEntity):
                 print("wall in path")
                 return True
 
+        # min distance to wall
+        wall_distances = []
+        wall_at_y = []
+        for y in range(wrld.height()):
+            walls_at_y = []
+            for x in range(wrld.width()):
+                if wrld.wall_at(x, y):
+                    walls_at_y.append((x,y))
+                    wall_distances.append(self.chebyshev_distance((self.x,self.y),(x,y)))
+            if len(walls_at_y) == wrld.width():
+                wall_at_y.append(y)
+        # print("wall_at_y: " + str(wall_at_y))
+        # wall at y
+        if wall_at_y and monster_y_dists: 
+            # solid wall between character and monster    
+            print("wall between monster and character")       
+            return abs(self.y - wall_at_y[0]) < min(monster_y_dists)
+
+        if self.state == State.FarFromMonster or (self.state == State.Free and wall_at_y):
+            return True
+        
         return False
 
     def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
@@ -620,3 +711,33 @@ class TestCharacter(CharacterEntity):
                 danger[ny, nx] = True
                 if wrld.wall_at(nx, ny):
                     break
+    def _evaluate_events(self, next_world, events):
+        """
+        Scans all events in the tick with ownership verification.
+        Returns: (event_score, is_terminal)
+        """
+        total = 0.0
+        for e in events:
+            owner_name = getattr(e.character, 'name', None)
+            mine = (owner_name == self.name)
+
+            if e.tpe == Event.CHARACTER_FOUND_EXIT and mine:
+                return self.EXIT_BONUS, True
+
+            if e.tpe == Event.CHARACTER_KILLED_BY_MONSTER and mine:
+                return self.DEATH_PENALTY, True
+
+            if e.tpe == Event.BOMB_HIT_CHARACTER:
+                victim_name = getattr(e.other, 'name', None)
+                if victim_name == self.name:
+                    return self.DEATH_PENALTY, True
+                elif mine:
+                    total += 5000.0
+
+            elif e.tpe == Event.BOMB_HIT_MONSTER and mine:
+                total += 50.0
+
+            elif e.tpe == Event.BOMB_HIT_WALL and mine:
+                total += 10.0
+
+        return total, False
