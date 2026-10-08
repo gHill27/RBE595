@@ -247,15 +247,10 @@ class TestCharacter(CharacterEntity):
                      for e in wrld.events)
             return (0.0, 1.0, 0.0, 1.0) if exited else (1.0, 0.0, 1.0, 1.0)
         
-        threat = False
-        for monsters in wrld.monsters.values():
-            for monster in monsters:
-                if self.Astar((wrld.me(self).x,wrld.me(self).y),(monster.x,monster.y)):
-                    threat = True        
-        if threat:
-            f1 = 1/(1+self.get_min_monster_dist(wrld))
-        else:
-            f1 = 0  
+
+        R = 6
+        dmon = self.get_min_monster_dist(wrld)
+        f1 = 0.0 if dmon >= 1000 else max(0.0, (R - dmon) / R)
         #f2
         maxd = np.max(self.dist)
         d = self.dist[wrld.me(self).y][wrld.me(self).x]
@@ -275,6 +270,7 @@ class TestCharacter(CharacterEntity):
         #added number of neighbors weight to incentivise moves in the open.
         num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
         f4 = 1/(10 - num_of_neighbors)
+        # f4 = 0
         # print(
         #     f"f1 = {f1} \nf2 = {f2} \nf3 = {f3} \nf4 = {f4}"
         # )
@@ -428,7 +424,7 @@ class TestCharacter(CharacterEntity):
 
         #reason 3: best move is to stay still, maybe try bombing to fix it? 
         displacement = self.net_displacement()
-        if displacement < 2 and self.no_path_ticks > 0 and wall_adjacent:
+        if displacement < 2 and self.no_path_ticks > 0:
             return True
 
         return False
@@ -459,18 +455,36 @@ class TestCharacter(CharacterEntity):
         with open(filename, "w") as f:
             json.dump(data, f, indent=2)
 
-    def get_min_monster_dist(self,wrld, default=1000):
-        """Chebyshev distance from me to the nearest monster in `wrld`.
-        Measures from the position in `wrld`, so it works on simulated worlds."""
+    def get_min_monster_dist(self, wrld, default=1000, max_depth=8):
+        """Walking distance (8-dir) to the nearest monster, or `default`
+        if none is reachable within max_depth steps."""
         me = wrld.me(self)
-        if me is None:                  # character is dead/gone in this world
+        if me is None:
             return 0
-        dists = [
-            self.chebyshev_distance((m.x, m.y), (me.x, me.y))
-            for mlist in wrld.monsters.values()
-            for m in mlist
-        ]
-        return min(dists, default=default)
+        mons = {(m.x, m.y) for ml in wrld.monsters.values() for m in ml}
+        if not mons:
+            return default
+
+        start = (me.x, me.y)
+        seen = {start}
+        frontier = [start]
+        for depth in range(max_depth + 1):
+            if any(p in mons for p in frontier):
+                return depth
+            nxt = []
+            for x, y in frontier:
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        n = (x + dx, y + dy)
+                        if (n not in seen
+                                and 0 <= n[0] < wrld.width()
+                                and 0 <= n[1] < wrld.height()
+                                and not wrld.wall_at(*n)):
+                            seen.add(n)
+                            nxt.append(n)
+            frontier = nxt
+        return default
+                         
     
     def get_min_bomb_dist(self, wrld, default=1000):
         me = wrld.me(self)
