@@ -41,6 +41,8 @@ class TestCharacter(CharacterEntity):
             self.EXPLORATION_PROB = 0.0
         self.MONSTER_AVOID_RADUIS = 3
         self.dist = None
+        self.pos_history = deque(maxlen=11)
+       
 
         # load weights from q_learning_weights.json
         with open("q_learning_weights.json") as f:
@@ -96,6 +98,7 @@ class TestCharacter(CharacterEntity):
     def do(self, wrld):
         # Your code here
         self.wrld = wrld  # Store the world reference for use in A* algorithm
+        self.record_position()
         distances_matrix = self.compute_distances(wrld.exitcell)
         self.define_state(wrld,distances_matrix)
         pos = (self.x, self.y)
@@ -175,7 +178,7 @@ class TestCharacter(CharacterEntity):
             self.weights[index] = weight + self.LEARNING_RATE * delta * features_s_a[index]
 
         self.update_weight_category(name, self.weights)
-        if self.should_bomb(wrld,pos):
+        if self.should_bomb(wrld,best_move):
             self.place_bomb()
 
         self.move(*best_move)
@@ -382,15 +385,15 @@ class TestCharacter(CharacterEntity):
         return max(abs(a - b) for a, b in zip(point1, point2))
 
     #BOMBING CODE:
-    def should_bomb(self, wrld, pos) -> bool:
+    def should_bomb(self, wrld,move) -> bool:
         # Never stack bombs
         if wrld.bombs:
             return False
 
-        x, y = pos
+        x, y = wrld.me(self).x, wrld.me(self).y
 
         # Reason 1: no path to the exit, and a wall is right next to me
-        if not self.Astar(pos, wrld.exitcell):
+        if not self.Astar((x,y), wrld.exitcell):
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     nx, ny = x + dx, y + dy
@@ -403,6 +406,11 @@ class TestCharacter(CharacterEntity):
             for m in mlist:
                 if max(abs(m.x - x), abs(m.y - y)) <= 2:
                     return True
+
+        #reason 3: best move is to stay still, maybe try bombing to fix it? 
+        displacement = self.net_displacement()
+        if  displacement < 2:
+            return True
 
         return False
 
@@ -525,3 +533,13 @@ class TestCharacter(CharacterEntity):
 
     def manhattan_distance(self,point1, point2):
         return sum(abs(p1 - p2) for p1, p2 in zip(point1, point2))
+
+    def record_position(self):
+        self.pos_history.append((self.x, self.y))
+
+    def net_displacement(self):
+        """How far I am from where I was 10 moves ago (Chebyshev)."""
+        h = self.pos_history
+        if len(h) < 2:
+            return 0
+        return max(abs(h[-1][0] - h[0][0]), abs(h[-1][1] - h[0][1]))
