@@ -34,16 +34,16 @@ class TestCharacter(CharacterEntity):
         self.score = 0 # Initialize score
         self.state: State = State.Free #starts assuming it has an empty environment
         self.GAMMA = 0.9
-        self.LEARNING_RATE = 0.01
+        self.LEARNING_RATE = 0.2
         if len(sys.argv) > 1:
             self.EXPLORATION_PROB = float(sys.argv[1])
         else:
-            self.EXPLORATION_PROB = 0.00
-        self.MONSTER_AVOID_RADUIS = 3
+            self.EXPLORATION_PROB = 0.0
+        self.MONSTER_AVOID_RADUIS = 4
         self.dist = None
         self.pos_history = deque(maxlen=11)
         self.no_path_ticks = 0      # consecutive turns A* has failed 
-        self.NO_PATH_THRESHOLD = 5  
+        self.NO_PATH_THRESHOLD = 8  
         
        
 
@@ -151,29 +151,38 @@ class TestCharacter(CharacterEntity):
         #should then go delta <- real reward + gamma * argmax Q(s',a') - Q(s,a) DONE
         #should then update weight <- weight + learning factor * f1(s,a) DONE
         
-        Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld,explore=True)
+        Q_s_a, best_move, sim_s_prime = self.argmaxQ(wrld, explore=True)
         print(f'Q(s,a) = {Q_s_a} \n best move is {best_move}')
+
         terminal = sim_s_prime.me(self) is None
         exited = any(e.tpe == Event.CHARACTER_FOUND_EXIT and e.character.name == self.name
-             for e in sim_s_prime.events)
+                    for e in sim_s_prime.events)
         died = terminal and not exited
 
-        
-        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name] - 2 
+        # 1. reward first
+        reward = sim_s_prime.scores[self.name] - wrld.scores[self.name] - 2
         if exited:
             reward += 10000.0
         if died:
             reward -= 1000.0
-        reward = reward/100.0 # scaling so it doesnt get massive weights 
+        reward /= 100.0
         print(f'reward is {reward}')
+
+        # 2. then delta, exactly one branch
+        FREE_VALUE = 10.0
         if terminal:
             delta = reward - Q_s_a
-
+        elif self.would_be_free(sim_s_prime):
+            me2 = sim_s_prime.me(self)
+            d = self.dist[me2.y][me2.x]
+            future = FREE_VALUE * (self.GAMMA ** d)
+            delta = reward + self.GAMMA * future - Q_s_a
         else:
-            q_sp_ap = self.argmaxQ(sim_s_prime)[0]
-            # print(f"Q(s',a') is {q_sp_ap}")
-            delta = reward + q_sp_ap*self.GAMMA - Q_s_a
-        # print(f'delta is {delta}')
+            q_sp_ap = self.argmaxQ(sim_s_prime)[0]      # greedy, no explore flag
+            delta = reward + self.GAMMA * q_sp_ap - Q_s_a
+
+        # delta = max(-5.0, min(5.0, delta))
+
 
         features_s_a = self.computefeatures(sim_s_prime,debug=True) 
         
@@ -265,10 +274,8 @@ class TestCharacter(CharacterEntity):
         else: 
             f3 = 0.0
     
-        #added number of neighbors weight to incentivise moves in the open.
-        num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
         # f4: Openness / Mobility
-        # num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
+        num_of_neighbors = len(self.get_neighbors((wrld.me(self).x, wrld.me(self).y)))
         # f4 = num_of_neighbors / 9.0
         f4 = 0
         if debug: 
@@ -473,7 +480,7 @@ class TestCharacter(CharacterEntity):
 
         # Tactical Trigger 3: Oscillation / Stagnation in front of a wall
         displacement = self.net_displacement()
-        if displacement < 2 and self.no_path_ticks >= self.NO_PATH_THRESHOLD and wall_adjacent:
+        if displacement < 2 and self.no_path_ticks >= self.NO_PATH_THRESHOLD:
             return self._arm_bomb()
 
         return False
@@ -631,3 +638,14 @@ class TestCharacter(CharacterEntity):
         if len(h) < 2:
             return 0
         return max(abs(h[-1][0] - h[0][0]), abs(h[-1][1] - h[0][1]))
+    
+    def would_be_free(self, sim):
+        me = sim.me(self)
+        if me is None or sim.bombs:
+            return False
+        my_d = self.dist[me.y][me.x]
+        if my_d <= 0:
+            return False
+        mon_d = [self.dist[m.y][m.x] for ml in sim.monsters.values() for m in ml
+                if self.dist[m.y][m.x] >= 0]
+        return not mon_d or my_d < min(mon_d)
