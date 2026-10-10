@@ -264,9 +264,10 @@ class TestCharacter(CharacterEntity):
         if d <= 0:
             d = math.dist((wrld.me(self).x,wrld.me(self).y),wrld.exitcell)
             # print(f'no ideal path using chebyshevs distance {d}')
-            f2 = -d/max(wrld.width(),wrld.height())
+            # f2 = -d/max(wrld.width(),wrld.height())
+            f2 = 1/(1+d)
         else:
-            f2 = -d/maxd
+            f2 = 1/(1+d)
         # print(threat)
 
         if (wrld.me(self).x, wrld.me(self).y) in self.simulate_explosion_danger_cells(wrld):
@@ -460,11 +461,7 @@ class TestCharacter(CharacterEntity):
             self.no_path_ticks += 1
 
         # Check for adjacent walls (cardinal directions only)
-        wall_adjacent = any(
-            wrld.wall_at(x + dx, y + dy)
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
-            if 0 <= x + dx < wrld.width() and 0 <= y + dy < wrld.height()
-        )
+        wall_adjacent = self.wall_adjacent(wrld,x,y)
 
         # Tactical Trigger 1: Path is blocked to the exit and touching an obstacle
         if self.no_path_ticks >= self.NO_PATH_THRESHOLD and wall_adjacent:
@@ -472,11 +469,11 @@ class TestCharacter(CharacterEntity):
 
         # Tactical Trigger 2: Defensive monster bombing
         # Only deploy if monster is closing in (dist <= 3) AND at least 2 tiles away (not fatal contact)
-        for mlist in wrld.monsters.values():
-            for m in mlist:
-                dist = max(abs(m.x - x), abs(m.y - y))
-                if 2 <= dist <= 3:
-                    return self._arm_bomb()
+        # for mlist in wrld.monsters.values():
+        #     for m in mlist:
+        #         dist = max(abs(m.x - x), abs(m.y - y))
+        #         if 2 <= dist <= 3:
+        #             return self._arm_bomb()
 
         # Tactical Trigger 3: Oscillation / Stagnation in front of a wall
         displacement = self.net_displacement()
@@ -488,6 +485,20 @@ class TestCharacter(CharacterEntity):
     def _arm_bomb(self):
         self.no_path_ticks = 0
         return True
+    
+    def wall_adjacent(self,wrld, x, y):
+        total = 0       # game walls + map edges
+        game_walls = 0  # real walls only
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = x + dx, y + dy
+            if nx < 0 or ny < 0 or nx >= wrld.width() or ny >= wrld.height():
+                total += 1  # map edge counts toward the total only
+            elif wrld.wall_at(nx, ny):
+                total += 1
+                game_walls += 1
+        output = total == 1 and game_walls == 1
+        print(f'wall adjacent check is {output}')
+        return output
     
     def update_weight_category(self, category_name, new_weights, filename="q_learning_weights.json"):
         # 1. Load existing file if it exists, otherwise start with a fresh structure
